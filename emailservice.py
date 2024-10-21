@@ -19,6 +19,6 @@ def send_otp_email(to_email, otp):
 
 def send_password_reset_email(to_email, reset_token):
     msg = Message("Password Reset Request", recipients=[to_email])
-    reset_link = f"https://yourdomain.com/reset-password?token={reset_token}"
+    reset_link = f"{Config.FRONTEND_URL}/reset-password?token={reset_token}"
     msg.body = f"To reset your password, click the following link: {reset_link}."
     mail.send(msg)
