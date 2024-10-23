@@ -2,6 +2,7 @@ from flask import Flask, jsonify
 from config import Config
 from auth import auth_bp
 from brand import brand_bp
+from trends import trends_bp
 from flask_jwt_extended import JWTManager
 from emailservice import init_mail
 from flask_cors import CORS
@@ -20,6 +21,7 @@ jwt = JWTManager(app)
 # Register blueprints
 app.register_blueprint(auth_bp, url_prefix='/auth')
 app.register_blueprint(brand_bp, url_prefix='/brand')
+app.register_blueprint(trends_bp, url_prefix='/trends') 
 
 @app.route('/')
 def home():

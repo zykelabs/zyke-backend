@@ -1,8 +1,13 @@
 from flask import Blueprint, redirect, url_for, jsonify, request
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
-from models import find_user_by_email, create_user, update_user_otp, update_user_password
-from emailservice import send_otp_email, send_password_reset_email
-from otp import generate_otp, verify_otp
+from models import find_user_by_email, create_user, update_user_password
+from emailservice import (
+    send_otp_email,
+    send_password_reset_email,
+    send_confirmation_email,
+    send_password_reset_success_email
+)
+from otp import generate_otp, verify_otp, store_user_data
 from utils import hash_password, verify_password
 from authlib.integrations.flask_client import OAuth
 from datetime import datetime
@@ -32,7 +37,7 @@ def oauth_init_app(app):
 @auth_bp.route('/register', methods=['POST'])
 def register():
     data = request.get_json()
-    print(data)
+    print("Registration Data:", data)
     email = data.get('email')
     password = data.get('password')
     first_name = data.get('first_name')
@@ -45,11 +50,13 @@ def register():
     if find_user_by_email(email):
         return jsonify({"msg": "User already exists"}), 409
 
-    # Send OTP email
+    # Generate OTP
     otp = generate_otp(email)
+
+    # Send OTP email
     send_otp_email(email, otp)
 
-    # Save user with pending OTP verification
+    # Prepare user data but do not save to main collection yet
     hashed_password = hash_password(password)
     user_data = {
         "email": email,
@@ -60,13 +67,15 @@ def register():
         "provider_id": None,
         "created_at": datetime.utcnow(),
         "updated_at": datetime.utcnow(),
-        "otp_verified": False  # Additional field for OTP verification
+        "otp_verified": False  # Will be set to True upon verification
     }
-    create_user(user_data)
+
+    # Store user data in otp_storage for later verification
+    store_user_data(email, user_data)
 
     return jsonify({"msg": "OTP sent to email"}), 200
 
-# Verify OTP
+# Verify OTP and save user
 @auth_bp.route('/verify-otp', methods=['POST'])
 def verify_otp_route():
     data = request.get_json()
@@ -76,10 +85,16 @@ def verify_otp_route():
     if not email or not otp:
         return jsonify({"msg": "Email and OTP are required"}), 400
 
-    success, msg = verify_otp(email, otp)
+    success, msg, user_data = verify_otp(email, otp)
     if success:
-        update_user_otp(email, verified=True)
-        return jsonify({"msg": "Email verified successfully"}), 200
+        # Update user data to mark OTP as verified
+        user_data['otp_verified'] = True
+        create_user(user_data)
+
+        # Send confirmation email
+        send_confirmation_email(email)
+
+        return jsonify({"msg": "Email verified successfully. Confirmation email sent."}), 200
     return jsonify({"msg": msg}), 400
 
 # Login User
@@ -120,7 +135,7 @@ def request_reset():
 
     return jsonify({"msg": "Password reset email sent"}), 200
 
-# Reset Password
+# Reset Password and send confirmation email
 @auth_bp.route('/reset-password', methods=['POST'])
 @jwt_required()
 def reset_password():
@@ -138,13 +153,17 @@ def reset_password():
 
     hashed_password = hash_password(new_password)
     update_user_password(email, hashed_password)
+    
+    # Send confirmation email after successful password reset
+    send_password_reset_success_email(email)
 
-    return jsonify({"msg": "Password reset successful"}), 200
+    return jsonify({"msg": "Password reset successful. Confirmation email sent."}), 200
 
+# OAuth Login
 @auth_bp.route('/oauth-login', methods=['POST'])
 def oauth_login():
     data = request.get_json()
-    print("Received data:", data)  # Debugging line to see incoming data
+    print("Received OAuth Data:", data)  # Debugging line to see incoming data
 
     email = data.get('email')
     first_name = data.get('first_name')
@@ -168,10 +187,8 @@ def oauth_login():
             "provider_id": provider_id,
             "created_at": datetime.utcnow(),
             "updated_at": datetime.utcnow(),
-            "otp_verified": True
+            "otp_verified": True  # OAuth users are considered verified
         }
         create_user(user_data)
 
     return jsonify({"msg": "OAuth login successful"}), 200  # Ensure the response is JSON
-
-
