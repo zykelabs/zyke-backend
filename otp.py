@@ -1,45 +1,45 @@
-import pyotp
-import time
+# otp.py
 
-otp_storage = {}
+import random
+import string
+from typing import Tuple, Dict
+from datetime import datetime, timedelta
 
-SECRET_KEY = pyotp.random_base32() 
+# Simple in-memory storage for OTPs
+otp_storage: Dict[str, Tuple[str, datetime]] = {}
+user_data_storage: Dict[str, Dict] = {}
 
-totp = pyotp.TOTP(SECRET_KEY, interval=600)
-
-def generate_otp(email):
-    otp = totp.now()  # Generate the OTP for the current time window
-    expiry_time = time.time() + 600  # OTP expires in 10 minutes
-    otp_storage[email] = {
-        'otp': otp,
-        'expiry_time': expiry_time,
-        'user_data': None
-    }
+def generate_otp(email: str, length: int = 6) -> str:
+    """Generates a random OTP of specified length."""
+    otp = ''.join(random.choices(string.digits, k=length))
+    expiration_time = datetime.utcnow() + timedelta(minutes=10)  # OTP valid for 10 minutes
+    otp_storage[email] = (otp, expiration_time)
     return otp
 
-def store_user_data(email, user_data):
-    if email in otp_storage:
-        otp_storage[email]['user_data'] = user_data
+def verify_otp(email: str, otp: str) -> Tuple[bool, str, Dict]:
+    """Verifies the OTP for the given email."""
+    stored_otp, expiration_time = otp_storage.get(email, (None, None))
+    if not stored_otp:
+        return False, 'No OTP found for this email.', {}
+    if datetime.utcnow() > expiration_time:
+        del otp_storage[email]
+        return False, 'OTP has expired.', {}
+    if otp != stored_otp:
+        return False, 'Invalid OTP.', {}
+    
+    # OTP is valid
+    del otp_storage[email]
+    
+    # Retrieve user_data
+    user_data = user_data_storage.get(email)
+    if not user_data:
+        return False, 'User data not found.', {}
+    
+    # Delete user_data after verification
+    del user_data_storage[email]
+    
+    return True, 'OTP verified successfully.', user_data
 
-def verify_otp(email, user_otp):
-    print("Current OTP Storage:", otp_storage)
-    if email in otp_storage:
-        record = otp_storage[email]
-        otp = record['otp']
-        expiry_time = record['expiry_time']
-
-        # Check if the OTP is expired
-        if time.time() > expiry_time:
-            del otp_storage[email]
-            return False, "OTP expired", None
-
-        # Verify if the provided OTP matches the stored OTP
-        if otp == user_otp:
-            user_data = record.get('user_data')
-            if user_data:
-                del otp_storage[email]
-                return True, "OTP verified", user_data
-            else:
-                return False, "User data not found", None
-
-    return False, "Invalid OTP", None
+def store_user_data(email: str, user_data: Dict):
+    """Stores user data temporarily before OTP verification."""
+    user_data_storage[email] = user_data

@@ -16,3 +16,11 @@ class Config:
     BACKEND_URL=os.environ.get('BACKEND_URL')
     
     PERPLEXITY_TOKEN = os.getenv('PERPLEXITY_TOKEN')
+
+    # Razorpay Configurations
+    RAZORPAY_KEY = os.environ.get('RAZORPAY_KEY')
+    RAZORPAY_SECRET = os.environ.get('RAZORPAY_SECRET')
+    RAZORPAY_WEBHOOK_SECRET = os.environ.get('RAZORPAY_WEBHOOK_SECRET')
+    
+    #OTP SECRET
+    SECRET_KEY=os.environ.get('SECRET_KEY')

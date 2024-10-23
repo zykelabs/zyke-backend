@@ -1,6 +1,6 @@
-from flask import Blueprint, redirect, url_for, jsonify, request
+from flask import Blueprint, jsonify, request
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
-from models import find_user_by_email, create_user, update_user_password
+from models import find_user_by_email, create_user, update_user_password, update_user_razorpay_customer_id
 from emailservice import (
     send_otp_email,
     send_password_reset_email,
@@ -12,6 +12,7 @@ from utils import hash_password, verify_password
 from authlib.integrations.flask_client import OAuth
 from datetime import datetime
 import os
+import razorpay  # Import Razorpay SDK
 
 # Allow OAuthlib to use HTTP for development (disable in production)
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
@@ -32,6 +33,11 @@ def oauth_init_app(app):
             'scope': 'openid email profile'
         }
     )
+
+# Initialize Razorpay client
+razorpay_client = razorpay.Client(
+    auth=(os.environ.get('RAZORPAY_KEY'), os.environ.get('RAZORPAY_SECRET'))
+)
 
 # Register User with OTP Verification
 @auth_bp.route('/register', methods=['POST'])
@@ -67,7 +73,8 @@ def register():
         "provider_id": None,
         "created_at": datetime.utcnow(),
         "updated_at": datetime.utcnow(),
-        "otp_verified": False  # Will be set to True upon verification
+        "otp_verified": False,
+        "razorpay_customer_id": None  # Initially none
     }
 
     # Store user data in otp_storage for later verification
@@ -88,8 +95,23 @@ def verify_otp_route():
     success, msg, user_data = verify_otp(email, otp)
     if success:
         # Update user data to mark OTP as verified
-        user_data['otp_verified'] = True
-        create_user(user_data)
+        user_id = create_user(user_data)
+
+        # Create Razorpay customer
+        try:
+            customer = razorpay_client.customer.create({
+                'name': f"{user_data.get('first_name')} {user_data.get('last_name')}",
+                'email': email,
+                'contact': user_data.get('phone', '')  # Assuming phone is collected
+            })
+            razorpay_customer_id = customer.get('id')
+
+            # Update user with Razorpay customer ID
+            update_user_razorpay_customer_id(user_id, razorpay_customer_id)
+        except Exception as e:
+            print("Error creating Razorpay customer:", e)
+            # Optionally handle customer creation failure
+            return jsonify({"msg": "User created but failed to create payment profile"}), 201
 
         # Send confirmation email
         send_confirmation_email(email)
@@ -187,8 +209,25 @@ def oauth_login():
             "provider_id": provider_id,
             "created_at": datetime.utcnow(),
             "updated_at": datetime.utcnow(),
-            "otp_verified": True  # OAuth users are considered verified
+            "otp_verified": True,  # OAuth users are considered verified
+            "razorpay_customer_id": None  # To be created
         }
-        create_user(user_data)
+        user_id = create_user(user_data)
+
+        # Create Razorpay customer
+        try:
+            customer = razorpay_client.customer.create({
+                'name': f"{first_name} {last_name}",
+                'email': email,
+                'contact': user_data.get('phone', '')  # Assuming phone is collected
+            })
+            razorpay_customer_id = customer.get('id')
+
+            # Update user with Razorpay customer ID
+            update_user_razorpay_customer_id(user_id, razorpay_customer_id)
+        except Exception as e:
+            print("Error creating Razorpay customer:", e)
+            # Optionally handle customer creation failure
+            return jsonify({"msg": "OAuth login successful, but failed to create payment profile"}), 200
 
     return jsonify({"msg": "OAuth login successful"}), 200  # Ensure the response is JSON

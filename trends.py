@@ -63,7 +63,7 @@ async def fetch_trend_info_pplx(trend):
         return response['choices'][0]['message']['content'], cost
   except Exception as e:
     print(e)
-    return "-1", 0
+    return -1, 0
 
 def extract_trend(trend_xml):
   summary_start = trend_xml.find("<summary>")
@@ -76,8 +76,8 @@ def extract_trend(trend_xml):
 
   return summary, description
 
+# Newer function, based on perplexity for manual scrapping and summarising
 async def fetch_trends_new():
-  #   return [["Linda Thorpe","yo i am tasmay tibs","rupam mahato is the goat"]], 0
   pytrends = TrendReq(hl='en-US', tz=330)
 
   trending_searches_series = pytrends.trending_searches(pn='india')
@@ -85,7 +85,6 @@ async def fetch_trends_new():
   costs = 0
   descriptions_async = []
   trending_searches = list(trending_searches_series[0])
-  #   print(f"\n\n{trending_searches}\n\n")
   for i, trend in enumerate(trending_searches):
       descriptions_async.append(fetch_trend_info_pplx(trend))
   descriptions = await asyncio.gather(*descriptions_async)
@@ -107,7 +106,7 @@ def get_trends():
         asyncio.set_event_loop(loop)
         trends, costs = loop.run_until_complete(fetch_trends_new())
         loop.close()
-        return jsonify({"trends": trends})
+        return jsonify({"trends": trends}),200
     except Exception as e:
         print(f"Error in fetching trends: {e}")
         return jsonify({"error": f"Failed to fetch trends {e}"}), 500

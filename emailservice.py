@@ -4,6 +4,7 @@ from flask import render_template_string
 
 mail = Mail()
 
+# Initialize mail configuration
 def init_mail(app):
     app.config['MAIL_SERVER'] = Config.MAIL_SERVER
     app.config['MAIL_PORT'] = Config.MAIL_PORT
@@ -13,6 +14,7 @@ def init_mail(app):
     app.config['MAIL_DEFAULT_SENDER'] = Config.MAIL_DEFAULT_SENDER
     mail.init_app(app)
 
+# Send OTP email
 def send_otp_email(to_email, otp):
     msg = Message("Your OTP Code", recipients=[to_email])
     msg.html = render_template_string("""
@@ -40,7 +42,7 @@ def send_otp_email(to_email, otp):
                                 <div style="background-color: #f8f9fa; color: #333; font-size: 32px; font-weight: bold; text-align: center; padding: 20px; border-radius: 8px; margin-bottom: 30px;">
                                     {{ otp }}
                                 </div>
-                                <p style="text-align: center; color: #666; font-size: 14px;">This code will expire in 10 minutes.</p>
+                                <p style="text-align: center; color: #666; font-size: 14px;">This code will expire in 5 minutes.</p>
                             </td>
                         </tr>
                         <tr>
@@ -57,6 +59,7 @@ def send_otp_email(to_email, otp):
     """, otp=otp)
     mail.send(msg)
 
+# Send password reset email
 def send_password_reset_email(to_email, reset_token):
     msg = Message("Password Reset Request", recipients=[to_email])
     reset_link = f"{Config.FRONTEND_URL}/reset-password?token={reset_token}"
@@ -106,6 +109,7 @@ def send_password_reset_email(to_email, reset_token):
     """, reset_link=reset_link)
     mail.send(msg)
 
+# Send confirmation email after successful registration
 def send_confirmation_email(to_email):
     msg = Message("Welcome to Zyke!", recipients=[to_email])
     msg.html = render_template_string("""
@@ -147,6 +151,7 @@ def send_confirmation_email(to_email):
     """)
     mail.send(msg)
 
+# Send confirmation email after successful password reset
 def send_password_reset_success_email(to_email):
     msg = Message("Password Reset Successful", recipients=[to_email])
     msg.html = render_template_string("""
