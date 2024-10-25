@@ -1,4 +1,5 @@
 from flask import Blueprint, jsonify, request
+from flask_cors import cross_origin
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
 from models import find_user_by_email, create_user, update_user_password, update_user_razorpay_customer_id
 from emailservice import (
@@ -12,7 +13,14 @@ from utils import hash_password, verify_password
 from authlib.integrations.flask_client import OAuth
 from datetime import datetime
 import os
-import razorpay  # Import Razorpay SDK
+import razorpay
+from pymongo import MongoClient
+import logging
+
+# Initialize MongoDB client and define the users collection
+mongo_client = MongoClient(os.environ.get('MONGO_URI'))
+db = mongo_client.get_database('zyke_data')
+users_collection = db.get_collection('users')
 
 # Allow OAuthlib to use HTTP for development (disable in production)
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
@@ -43,7 +51,7 @@ razorpay_client = razorpay.Client(
 @auth_bp.route('/register', methods=['POST'])
 def register():
     data = request.get_json()
-    print("Registration Data:", data)
+    logging.info("Registration Data: %s", data)
     email = data.get('email')
     password = data.get('password')
     first_name = data.get('first_name')
@@ -82,7 +90,6 @@ def register():
 
     return jsonify({"msg": "OTP sent to email"}), 200
 
-# Verify OTP and save user
 @auth_bp.route('/verify-otp', methods=['POST'])
 def verify_otp_route():
     data = request.get_json()
@@ -92,13 +99,18 @@ def verify_otp_route():
     if not email or not otp:
         return jsonify({"msg": "Email and OTP are required"}), 400
 
+    # Verify the OTP
     success, msg, user_data = verify_otp(email, otp)
+    
     if success:
         # Update user data to mark OTP as verified
+        user_data['otp_verified'] = True  # Mark email as verified
+        
+        # Create user and get the user ID
         user_id = create_user(user_data)
 
-        # Create Razorpay customer
         try:
+            # Attempt to create a Razorpay customer
             customer = razorpay_client.customer.create({
                 'name': f"{user_data.get('first_name')} {user_data.get('last_name')}",
                 'email': email,
@@ -108,16 +120,50 @@ def verify_otp_route():
 
             # Update user with Razorpay customer ID
             update_user_razorpay_customer_id(user_id, razorpay_customer_id)
+
+        except razorpay.errors.BadRequestError as e:
+            error_message = str(e)
+            if 'Customer already exists for the merchant' in error_message:
+                # Fetch the existing customer from Razorpay
+                try:
+                    # Fetching the customer list from Razorpay to find the existing customer ID
+                    customers = razorpay_client.customer.all({'email': email})
+                    if customers and 'items' in customers:
+                        existing_customer = next((cust for cust in customers['items'] if cust['email'] == email), None)
+                        if existing_customer:
+                            razorpay_customer_id = existing_customer.get('id')
+                            update_user_razorpay_customer_id(user_id, razorpay_customer_id)
+                            logging.info("Customer exists. Razorpay Customer ID: %s", razorpay_customer_id)
+                        else:
+                            raise Exception("Customer exists but could not fetch Razorpay Customer ID.")
+                    else:
+                        raise Exception("Customer exists but could not fetch Razorpay customer data.")
+                except Exception as fetch_error:
+                    logging.error("Error fetching Razorpay customer: %s", str(fetch_error))
+                    return jsonify({"msg": "User created but failed to fetch existing payment profile."}), 201
+            else:
+                # For other bad request errors
+                logging.error("BadRequestError from Razorpay: %s", error_message)
+                return jsonify({"msg": "User created but failed to create payment profile. Bad Request Error."}), 201
+
+        except razorpay.errors.ServerError as e:
+            # Log server error from Razorpay
+            logging.error("ServerError from Razorpay: %s", str(e))
+            return jsonify({"msg": "User created but failed to create payment profile due to Razorpay server issue."}), 201
+
         except Exception as e:
-            print("Error creating Razorpay customer:", e)
-            # Optionally handle customer creation failure
-            return jsonify({"msg": "User created but failed to create payment profile"}), 201
+            # Handle other exceptions
+            logging.error("General error creating Razorpay customer: %s", str(e))
+            return jsonify({"msg": "User created but failed to create payment profile due to an unexpected error."}), 201
 
         # Send confirmation email
         send_confirmation_email(email)
 
         return jsonify({"msg": "Email verified successfully. Confirmation email sent."}), 200
+
+    # If OTP verification failed
     return jsonify({"msg": msg}), 400
+
 
 # Login User
 @auth_bp.route('/login', methods=['POST'])
@@ -185,7 +231,7 @@ def reset_password():
 @auth_bp.route('/oauth-login', methods=['POST'])
 def oauth_login():
     data = request.get_json()
-    print("Received OAuth Data:", data)  # Debugging line to see incoming data
+    logging.info("Received OAuth Data: %s", data)
 
     email = data.get('email')
     first_name = data.get('first_name')
@@ -214,7 +260,7 @@ def oauth_login():
         }
         user_id = create_user(user_data)
 
-        # Create Razorpay customer
+        # Attempt to create Razorpay customer
         try:
             customer = razorpay_client.customer.create({
                 'name': f"{first_name} {last_name}",
@@ -225,9 +271,73 @@ def oauth_login():
 
             # Update user with Razorpay customer ID
             update_user_razorpay_customer_id(user_id, razorpay_customer_id)
+
+        except razorpay.errors.BadRequestError as e:
+            error_message = str(e)
+            if 'Customer already exists for the merchant' in error_message:
+                # Fetch existing Razorpay customer by email
+                try:
+                    customers = razorpay_client.customer.all({'email': email})
+                    if customers and 'items' in customers:
+                        existing_customer = next((cust for cust in customers['items'] if cust['email'] == email), None)
+                        if existing_customer:
+                            razorpay_customer_id = existing_customer.get('id')
+                            update_user_razorpay_customer_id(user_id, razorpay_customer_id)
+                            logging.info("Customer exists. Razorpay Customer ID: %s", razorpay_customer_id)
+                        else:
+                            raise Exception("Customer exists but could not fetch Razorpay Customer ID.")
+                    else:
+                        raise Exception("Customer exists but could not fetch Razorpay customer data.")
+                except Exception as fetch_error:
+                    logging.error("Error fetching Razorpay customer: %s", str(fetch_error))
+                    return jsonify({"msg": "OAuth login successful, but failed to fetch existing payment profile."}), 200
+            else:
+                logging.error("BadRequestError from Razorpay: %s", error_message)
+                return jsonify({"msg": "OAuth login successful, but failed to create payment profile. Bad Request Error."}), 200
+
+        except razorpay.errors.ServerError as e:
+            logging.error("ServerError from Razorpay: %s", str(e))
+            return jsonify({"msg": "OAuth login successful, but failed to create payment profile due to Razorpay server issue."}), 200
+
         except Exception as e:
-            print("Error creating Razorpay customer:", e)
-            # Optionally handle customer creation failure
-            return jsonify({"msg": "OAuth login successful, but failed to create payment profile"}), 200
+            logging.error("General error creating Razorpay customer: %s", str(e))
+            return jsonify({"msg": "OAuth login successful, but failed to create payment profile due to an unexpected error."}), 200
 
     return jsonify({"msg": "OAuth login successful"}), 200  # Ensure the response is JSON
+
+# Set Account Type
+@auth_bp.route('/set-account-type', methods=['POST'])
+@cross_origin()
+@jwt_required()
+def set_account_type():
+    """
+    Endpoint to set the account type for an authenticated user.
+    Expects JSON payload: { "account_type": "big_brands" }
+    """
+    data = request.get_json()
+    if not data or 'account_type' not in data:
+        return jsonify({'error': 'Missing account_type in request.'}), 400
+
+    account_type = data['account_type']
+    valid_account_types = ['big_brands', 'startup_smb', 'individual_creators', 'ecommerce_sellers']
+    if account_type not in valid_account_types:
+        return jsonify({'error': 'Invalid account_type provided.'}), 400
+
+    try:
+        # Retrieve the user ID from the JWT token
+        user_id = get_jwt_identity()
+
+        # Update the user's account_type in the database
+        result = users_collection.update_one(
+            {'_id': user_id},
+            {'$set': {'account_type': account_type}}
+        )
+
+        if result.modified_count == 0:
+            return jsonify({'message': 'Account type was already set.'}), 200
+
+        return jsonify({'message': 'Account type set successfully.'}), 200
+
+    except Exception as e:
+        logging.exception("Failed to set account type.")
+        return jsonify({'error': 'Failed to set account type.'}), 500

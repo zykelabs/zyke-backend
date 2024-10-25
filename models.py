@@ -2,6 +2,7 @@ from pymongo import MongoClient
 from config import Config
 from bson.objectid import ObjectId
 from datetime import datetime
+from typing import Optional
 
 # Establish MongoDB connection
 client = MongoClient(Config.MONGO_URI)
@@ -80,7 +81,6 @@ def move_user_to_main_collection(email):
         user_data.pop("otp_expires_at", None)
         create_user(user_data)
         delete_temporary_user_data(email)
-        
 
 def update_user_razorpay_customer_id(user_id, razorpay_customer_id):
     users_collection.update_one(
@@ -128,57 +128,42 @@ def update_user_oauth(email, oauth_data):
 
 # Brand Profile-related functions
 def create_brand_profile(user_id, profile_data):
-    """Create a new brand profile for a user."""
-    profile_data['user_id'] = ObjectId(user_id)
-    profile_data['created_at'] = datetime.utcnow()
-    profile_data['updated_at'] = datetime.utcnow()
+    """
+    Create a new brand profile.
+    """
     result = brand_profiles_collection.insert_one(profile_data)
     return str(result.inserted_id)
 
 def get_brand_profile(user_id):
-    """Retrieve a user's brand profile."""
-    return brand_profiles_collection.find_one({'user_id': ObjectId(user_id)})
+    """
+    Retrieve a brand profile by user ID.
+    """
+    return brand_profiles_collection.find_one({'user_id': user_id})
 
-def update_brand_profile(user_id, update_data):
-    """Update a user's brand profile."""
-    update_data['updated_at'] = datetime.utcnow()
-    result = brand_profiles_collection.update_one(
-        {'user_id': ObjectId(user_id)},
-        {'$set': update_data}
-    )
-    return result.modified_count
-
-def delete_brand_profile(user_id):
-    """Delete a user's brand profile."""
-    result = brand_profiles_collection.delete_one({'user_id': ObjectId(user_id)})
-    return result.deleted_count
-
-# Brand Voice-related functions
 def create_brand_voice(profile_id, voice_data):
-    """Create a new brand voice for a user's brand profile."""
+    """
+    Create a new brand voice associated with a brand profile.
+    """
     voice_data['brand_profile_id'] = ObjectId(profile_id)
-    voice_data['created_at'] = datetime.utcnow()
-    voice_data['updated_at'] = datetime.utcnow()
     result = brand_voices_collection.insert_one(voice_data)
     return str(result.inserted_id)
 
 def get_brand_voice(profile_id):
-    """Retrieve a brand profile's brand voice."""
+    """
+    Retrieve a brand voice by brand profile ID.
+    """
     return brand_voices_collection.find_one({'brand_profile_id': ObjectId(profile_id)})
 
-def update_brand_voice(profile_id, update_data):
-    """Update a brand profile's brand voice."""
-    update_data['updated_at'] = datetime.utcnow()
+def update_brand_voice(profile_id, voice_data):
+    """
+    Update an existing brand voice associated with a brand profile.
+    """
     result = brand_voices_collection.update_one(
         {'brand_profile_id': ObjectId(profile_id)},
-        {'$set': update_data}
+        {'$set': voice_data},
+        upsert=True
     )
     return result.modified_count
-
-def delete_brand_voice(profile_id):
-    """Delete a brand profile's brand voice."""
-    result = brand_voices_collection.delete_one({'brand_profile_id': ObjectId(profile_id)})
-    return result.deleted_count
 
 # Transaction-related functions
 def create_transaction(transaction_data):

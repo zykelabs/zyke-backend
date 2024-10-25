@@ -1,5 +1,3 @@
-# otp.py
-
 import random
 import string
 from typing import Tuple, Dict
@@ -10,9 +8,8 @@ otp_storage: Dict[str, Tuple[str, datetime]] = {}
 user_data_storage: Dict[str, Dict] = {}
 
 def generate_otp(email: str, length: int = 6) -> str:
-    """Generates a random OTP of specified length."""
     otp = ''.join(random.choices(string.digits, k=length))
-    expiration_time = datetime.utcnow() + timedelta(minutes=10)  # OTP valid for 10 minutes
+    expiration_time = datetime.utcnow() + timedelta(minutes=10)
     otp_storage[email] = (otp, expiration_time)
     return otp
 

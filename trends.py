@@ -78,8 +78,10 @@ def extract_trend(trend_xml):
 
 # Newer function, based on perplexity for manual scrapping and summarising
 async def fetch_trends_new():
+  # print("aaya")
+  # print(TrendReq)
   pytrends = TrendReq(hl='en-US', tz=330)
-
+  # print(pytrends)
   trending_searches_series = pytrends.trending_searches(pn='india')
 
   costs = 0
