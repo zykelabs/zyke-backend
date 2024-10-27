@@ -8,6 +8,8 @@ from emailservice import init_mail
 from flask_cors import CORS
 from brandvoiceinfo import brand_voice_bp
 from auth import oauth_init_app,auth_bp
+from trend_to_idea import trend_to_idea_bp
+from repurpose import repurpose_bp
 
 app = Flask(__name__)
 app.config.from_object(Config)
@@ -30,6 +32,8 @@ app.register_blueprint(trends_bp, url_prefix='/trends')
 app.register_blueprint(transactions_bp, url_prefix='/transactions')
 app.register_blueprint(webhooks_bp, url_prefix='/webhooks')
 app.register_blueprint(brand_voice_bp, url_prefix='/brand_voice_info')
+app.register_blueprint(trend_to_idea_bp, url_prefix='/trend_to_idea')
+app.register_blueprint(repurpose_bp, url_prefix='/repurpose')
 
 @app.route('/')
 def home():

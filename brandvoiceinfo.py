@@ -17,6 +17,7 @@ from collections import deque
 import nest_asyncio
 import random
 from openai import AsyncOpenAI, OpenAI
+from apify_client import ApifyClient
 from models import (
     get_brand_profile,
     create_brand_voice,
@@ -25,7 +26,13 @@ from models import (
     get_brand_voice
 )
 import jwt
+from io import BytesIO
 from flask_jwt_extended import get_jwt_identity, jwt_required
+import requests
+import os
+from PIL import Image
+import pandas as pd
+import base64
 # Initialize blueprint
 brand_voice_bp = Blueprint('brand_voice_info', __name__)
 
@@ -37,6 +44,16 @@ deepinfra_client = AsyncOpenAI(
 )
 
 client_open_router = OpenAI(
+    api_key=Config.OPENROUTER_API_KEY,
+    base_url="https://openrouter.ai/api/v1",
+)
+
+client_openai_summ = OpenAI(
+    api_key=Config.OPENROUTER_API_KEY,
+    base_url="https://openrouter.ai/api/v1",
+)
+
+client_open_router_async = AsyncOpenAI(
     api_key=Config.OPENROUTER_API_KEY,
     base_url="https://openrouter.ai/api/v1",
 )
@@ -952,6 +969,308 @@ Since this data will guide an LLM to create social media posts, product descript
   final_results = final_results.replace("**", "")
   return final_results, costs
 
+#Post Scrapping
+def scrape_instagram(username):
+  insta_images = []
+  client_apify = ApifyClient(Config.APIFY_API_KEY)
+
+  n = 20
+  # Prepare the Actor input
+  run_input = {
+      "username": username,
+      "resultsLimit": n,
+  }
+
+  # Run the Actor and wait for it to finish
+  run = client_apify.actor("nH2AHrwxeTRJoN5hX").call(run_input=run_input)
+
+  # Fetch and print Actor results from the run's dataset (if there are any)
+  for item in client_apify.dataset(run["defaultDatasetId"]).iterate_items():
+      if len(item['images']) != 0:
+        insta_images.append([item['caption'],item['images'],datetime.strptime(item['timestamp'], "%Y-%m-%dT%H:%M:%S.%fZ")])
+      elif item['displayUrl']:
+        insta_images.append([item['caption'],[item['displayUrl']],datetime.strptime(item['timestamp'], "%Y-%m-%dT%H:%M:%S.%fZ")])
+  cost = 2.3/1000 * n
+  return insta_images, cost
+
+async def scrape_img(img_url):
+  try:
+    response = requests.get(img_url, timeout=60)
+    return response
+  except:
+    return -1
+
+async def image_desc(content, caption):
+  response = await client_open_router_async.chat.completions.create(
+  model="openai/gpt-4o-mini",
+  messages=[
+    {"role": "system","content":
+'''Imagine you are both a brand strategist and a graphic designer, tasked with deeply understanding and replicating the visual style of your brand across an entire post containing multiple images. Each image is accompanied by a caption that provides additional context. Your goal is to create an exhaustive, highly detailed description of the entire post and each individual image to ensure consistency in future posts and designs.
+
+
+### For the Entire Post:
+
+**Overall Context, Usage, and Messaging:**
+Explain the Post: Provide a comprehensive overview of what the post conveys as a whole. Describe the collective meaning and messaging behind all the images and their captions.
+Intent Behind the Post: Explain the purpose of the post (e.g., promotional campaign, brand storytelling, product launch) and the intended audience engagement.
+Usage Context: Describe where and how this post is intended to be used (e.g., Instagram carousel, Facebook album, website gallery). Discuss how this context influences the overall design and cohesion of the images.
+Visual and Thematic Consistency: Analyze how the images and captions work together to create a unified aesthetic and message. Highlight any recurring themes, motifs, or visual elements that tie the post together.
+
+
+### For Each Individual Image:
+
+**Context, Usage, and Messaging:**
+Explain the Image: Describe the specific meaning and messaging of the individual image.
+Intent Behind Posting the Image: Explain why this particular image was included in the post and its role in the overall narrative.
+Usage Context: Detail where and how this image might be used within the post (e.g., first image to grab attention, middle images to provide information, last image as a call-to-action).
+Influence of Context on Design: Describe how the intended usage and placement within the post influence the design elements of the image.
+
+**Composition and Layout:**
+Arrangement of Elements: Explain the positioning, balance, and use of negative space within the image.
+Alignment and Focal Points: Note how elements are aligned and identify the focal points and visual hierarchy.
+
+**Color Palette:**
+Colors Used - Identify and describe the specific colors, including their shades and tones.
+Brand Alignment- Explain how these colors align with the brand’s identity and the emotional responses they evoke.
+
+**Imagery and Graphics:**
+Subject Matter: Describe the main subjects, including people, objects, or icons.
+Style and Symbolism: Discuss the artistic style (e.g., realism, minimalism) and any symbolic elements present.
+Overall Mood: Convey the mood or atmosphere created by the visuals.
+
+**Texture and Effects:**
+Textures and Patterns: Note any textures or patterns used in the image.
+Graphic Effects: Describe effects such as gradients, shadows, overlays, and how they contribute to the image’s depth and feel.
+
+**Branding Elements:**
+Logos and Taglines: Identify any logos, taglines, or other brand-specific features included.
+Integration and Role: Describe how these elements are integrated into the image and their role in reinforcing brand identity.
+
+**Lighting and Shadows:**
+Use of Lighting: Discuss how lighting, shadowing, and reflections are utilized.
+Impact on Mood and Focus: Explain how these elements influence the image’s mood and where the viewer’s attention is directed.
+
+**Text Description:**
+Text Content: Transcribe all text present in the image, including captions.
+Meaning and Conveyance: Describe the meaning behind the text and what message it conveys to the end-user.
+Detailed Analysis: Provide a thorough explanation of how the text relates to the visual elements and overall messaging.
+
+**Typography:**
+Font Details: Detail the font style, size, weight, and placement of any text.
+Design Complementation: Explain how the typography complements the overall design and adheres to brand guidelines.
+
+
+### Instructions for Execution:
+
+**Consider Captions:** Alongside the image inputs, consider its corresponding caption to get better context for analysis of the images.
+**Structured Output:** Present the description for the entire post first, followed by individual sections for each image as outlined above.
+**Comprehensive Detail:** Ensure that each description is thorough enough that another designer, with no prior knowledge of the brand, could recreate the style and essence accurately.
+**Blueprint Creation:** Think of the descriptions as creating a blueprint for future designs that embody the same branding and visual principles.
+**Extensive Output:** Write extremely detailed descriptions, make them vivid. Write description for each of the images provided to you. Do not miss out on any image. Also write detailed description about the whole post in general, as mentioned previously.
+**It is very important to follow all instructions mentioned. Be patient and write about the post and all the individual images mentioned previously. Do not miss any of the images.**
+
+### Example Structure:
+`Overall Post Description:
+
+[Detailed analysis of the entire post]
+Image 1:
+
+Caption: [Caption text]
+Context, Usage, and Messaging:
+[Detailed description]
+Composition and Layout:
+[Detailed description]
+(Continue with all specified sections)
+
+Image 2:
+
+Caption: [Caption text]
+Context, Usage, and Messaging:
+[Detailed description]
+Composition and Layout:
+[Detailed description]
+(Continue with all specified sections)
+(Continue for all images in the post)
+
+Image 3:
+......`
+
+### Usage Tips:
+
+**Consistency is Key:** Ensure that the descriptions maintain a consistent level of detail and structure for both the overall post and individual images.
+**Leverage Captions:** Use the captions to enhance understanding of each image’s role and context within the post.
+**Focus on Brand Identity:** Pay special attention to elements that reinforce the brand’s identity to maintain coherence across all future designs.'''},
+    {"role": "user",
+      "content": content,},]
+
+  , max_tokens=8192,
+  temperature = 0.15)
+
+  cost = (response.usage.prompt_tokens * 0.15 + response.usage.completion_tokens * 0.6) / (10**6)
+
+  return (response.choices[0].message.content,cost,caption)
+
+def image_out_summ(text):
+  chat_history = [{"role": "system","content":
+'''**Instruction:**
+
+You are tasked with structuring the textual description of a collection of highly detailed social media posts from a specific brand. The posts are organized in reverse chronological order, with the most recent posts appearing first. The posts themselves are not provided, rather their extremely detailed descriptions are provided. Each post includes a caption and descriptions of multiple images, focusing on their composition, messaging, color palette, and branding elements. **Please note that each post may contain multiple images, and the description for each post includes both a general overview of the post and individual explanations for each image. Ensure that you understand the difference between the overall post content and the specific individual image details during structuring. Also, in these instructions, by "posts," we mean the entire post, not the individual images.** The objective is to condense the information while preserving the essence of the brand's style and core attributes.
+
+**Note: You have to keep the description long and detailed. It must be so that a new graphic designer, after reading through it can understand the psychology of the brand, its posting style, and its marketing methods and also get a visual understanding of how the posts look, just by reading it. It should be enough to make the designer visualize each and every aspect of post-designing and post-creation. It should also give him a sense of what type of posts the brand creates, like funny, informative, humorous, witty, youthful, etc. There should also be a number of post examples, at least 10, which should represent a diverse range of posts and should give the designer an idea about the posts. It should be extensive, comprehensive, and detailed. But it should be concise at the same time. It should not contain repetitive information or unnecessary things. Thus, you have to properly structure it, describing the posting, marketing, .. styles, and also make it to the point, so that it is not overly lengthy to read.**
+
+**Guidelines for Structuring:**
+
+1. **Preserve the Brand’s Style and Voice:**
+   - Ensure that the tone, language, and unique vocabulary characteristics of the brand remain intact.
+   - Highlight recurring themes and common post structures, such as how captions are framed, the use of emojis, and formatting preferences.
+
+2. **Maintain Key Details of Visual Descriptions:**
+   - For image descriptions, capture essential visual elements, including color schemes, composition, and any prominent features (e.g., logos, branding marks).
+   - Focus on how these visual elements contribute to the overall messaging of each post.
+
+3. **Provide Detailed Descriptions:**
+   - Ensure that the description retain comprehensive details about each aspect of the posts, including nuanced elements of the captions and intricate details of image compositions.
+   - Avoid overly general statements; instead, strive to include specific examples and descriptive language that reflect the depth of the original content.
+
+4. **Summarize Recurring Patterns and Elements:**
+   - Identify patterns in post types, such as product promotions, behind-the-scenes content, or customer testimonials.
+   - Group similar content types and summarize them cohesively, without losing important distinctions between posts.
+
+5. **Minimize Redundancy:**
+   - Eliminate unnecessary repetition of identical or very similar information across posts, focusing instead on the unique aspects of each one.
+   - When appropriate, generalize across multiple posts where they follow a consistent format or theme.
+
+6. **Emphasize Recent Posts:**
+   - Give additional importance to the most recent 5-10 posts, ensuring that their unique elements and any new trends in the brand’s style are adequately represented in the summary.
+   - Analyze these recent posts to capture any shifts or evolutions in the brand’s messaging or visual presentation.
+
+7. **Include Recent Posts as Examples:**
+   - **Compulsorily include at least some of the recent posts (specifically from the last 5-10 posts) in their entirety as examples within the summary to showcase the latest style and content approaches.**
+   - **Ensure that the posts you select as examples from the recent 5-10 posts are diverse and not similar to each other.** *(Do not select similar posts)*
+
+8. **Retain Raw Examples for Multi-Shot Prompting:**
+   - **Select and retain approximately 10 posts in their original, detailed form to serve as raw examples for multi-shot prompting.**
+   - **Ensure these examples are diverse and representative of the brand’s range, covering different post types and styles.**
+   - **Keep the raw examples identical to the input data without any modification or summarization.**
+
+9. **Organize the Description Effectively:**
+   - Structure the description in a clear and logical manner, possibly grouping similar posts together and highlighting key themes and styles.
+   - Ensure that the description flows cohesively, making it easy to understand the brand’s overall social media strategy and style.
+
+**Output Requirements:**
+
+* **Comprehensive Description:** A highly detailed yet condensed version of the 20 posts, provided to you as input, that captures all essential aspects of the brand’s style, voice, and recurring themes without excessive compression. The description should include thorough descriptions that reflect the depth and nuance of the original posts. **Keep this version, highly detailed even though it is a condensed version of the original.**
+* **Included Recent Examples:** Incorporate at least some of the most recent posts (preferably from the first 5-10) as full examples to illustrate current style and content.
+* **Raw Multi-Shot Examples:** Provide atleast 10 posts in their original detailed form to be used as raw examples for multi-shot prompting. Try to make the selection of these posts diverse.
+* **Final Conclusion:** Provide a comprehensive conclusion summarizing the brand's marketing or branding style, its posts, and your overall response to the summarization task.
+* **Note:** Do not change the content of the Included Recent Examples or the Raw Multi-Shot Examples. Also do not write "(Details as provided above)" in their content, you have to copy-paste that content again.
+
+Focus on clarity and conciseness while maintaining the brand’s distinct identity throughout the summary. Ensure that the final output serves as a robust guide for generating future posts that align seamlessly with the established brand style. **Additionally, provide a conclusion that encapsulates the overall findings and insights derived from the summarized posts.**'''},
+                  {
+              "role": "user",
+              "content": f"Here is the social media posts data:\n\n{text}",
+          }]
+
+  # response_content = ""
+  try:
+        completion = client_openai_summ.chat.completions.create(
+        model="openai/o1-mini",
+        messages= chat_history,
+        temperature=0.1,
+        max_tokens=58_764)
+        # print(completion.usage)
+        cost = (completion.usage.prompt_tokens * 3 + completion.usage.completion_tokens * 12) / (10**6)
+        return completion.choices[0].message.content, cost
+  except Exception as e:
+    print(e)
+    return ("Error: " + str(e)), 0
+
+async def brand_post_info_scrape(insta_username):
+  costs = 0
+  insta_images, cost = scrape_instagram(insta_username)
+  costs += cost
+  insta_images.sort(key=lambda x: x[2], reverse = True)
+
+  imgs = []
+  for i in insta_images:
+    for j in i[1]:
+      imgs.append(scrape_img(j))
+
+  img_scrape = await asyncio.gather(*imgs)
+  image_dict = {}
+  c = 0
+  for i in range(len(insta_images)):
+    image_dict[insta_images[i][0]] = [[],insta_images[i][2]]
+    for j in range(len(insta_images[i][1])):
+      try:
+        img = BytesIO((img_scrape[c]).content)
+        image_dict[insta_images[i][0]][0].append(img)
+      except:
+        image_dict[insta_images[i][0]][0].append(-1)
+      c += 1
+
+  # Modify this for saving brand voice images in directory
+  dir = os.getcwd()
+  if not os.path.exists(f'{dir}/images'):
+    os.makedirs(f'{dir}/images')
+
+  l = []
+  idx = 0
+
+  for i in image_dict:
+    idx += 1
+    for id,j in enumerate(image_dict[i][0]):
+      try:
+        img = Image.open(j)
+        filename = f"{dir}/images/{image_dict[i][1]}_{id+1}.jpg"
+        img.save(filename)
+        l.append([idx, id+1,f"{image_dict[i][1]}_{id+1}.jpg",i,image_dict[i][1]])
+      except Exception as e:
+        # print(f"{image_dict[i][1]}_{id+1}.jpg")
+        # print(image_dict[i][1])
+        print(f"Error in Saving part: {e}")
+
+  df = pd.DataFrame(l, columns=['post_number','image_number_in_post','image_file_dir','caption', 'timestamp'])
+  df.to_csv(f'{dir}/images/insta_image_info.csv', index=False)
+
+  descs = []
+  for i in list(image_dict.keys()):
+
+    content = [{"type": "text", "text": f"The caption for the image is: {i}"}]
+    # print(i)
+
+    check = 0
+
+    for j in image_dict[i][0]:
+      try:
+        # print(j)
+        base64_image = base64.b64encode(j.getvalue()).decode('utf-8')
+        content.append({"type": "image_url",
+                            "image_url": {
+                            "url": f"data:image/jpeg;base64,{base64_image}",
+                            "detail": "high"}})
+        check = 1
+
+      except:
+        pass
+
+    if check == 0:
+      # descs.append(-1)
+      continue
+
+    descs.append(image_desc(content, i))
+
+  img_descs = await asyncio.gather(*descs)
+
+  # print("Getting Image Desc")
+  out = ''
+  for i in img_descs:
+    gen = i[0]
+    # print(f'#### Caption: {i[2]}\n\n#### Output:\n\n{gen}\n\n\n\n')
+    out += f'#### Caption: {i[2]}\n\n#### Output:\n\n{gen}\n\n\n\n'
+    costs += i[1]
+  return out, costs
+
 # # Function to verify next-auth JWT tokens
 # def verify_nextauth_jwt(token: str) -> Optional[str]:
 #     try:
@@ -971,68 +1290,104 @@ Since this data will guide an LLM to create social media posts, product descript
 def create_brand():
     data = request.json
     try:
-        # Retrieve the user ID from the JWT token
         user_id = get_jwt_identity()
 
-        # Validate required fields (similar to frontend validation)
+        # Required fields with the updated socialMedia structure
         required_fields = [
             'company', 'brandVoiceName', 'industries', 'location', 'contentTypes',
-            'brandPersonalities', 'targetAudience', 'brandTone',
-            'brandType', 'socialMedia', 'otherUrls',
-            'manualInputText', 'designText'
+            'brandPersonalities', 'targetAudience', 'brandTone', 'brandType',
+            'socialMedia', 'otherUrls', 'manualInputText', 'designText'
         ]
         missing_fields = [field for field in required_fields if field not in data or not data[field]]
         if missing_fields:
             return jsonify({'error': f'Missing required fields: {", ".join(missing_fields)}'}), 400
 
-        # Additional validations can be added here as needed
-        # For example, validate URLs, social media handles, etc.
+        # Validate the socialMedia object structure
+        social_media_data = data.get("socialMedia", {})
+        if not isinstance(social_media_data, dict):
+            return jsonify({'error': 'Invalid socialMedia data format.'}), 400
+        # Ensure instagram and twitter are usernames (not URLs) and linkedin is a URL
+        instagram = social_media_data.get("instagram", "").strip('@')
+        twitter = social_media_data.get("twitter", "").strip('@')
+        linkedin = social_media_data.get("linkedin", "").strip()
 
-        # Save the brand profile to MongoDB
+        # Basic validation for LinkedIn URL
+        if linkedin and not linkedin.startswith("https://www.linkedin.com/"):
+            return jsonify({'error': 'LinkedIn URL must start with "https://www.linkedin.com/"'}), 400
+
+        social_media = {
+            "instagram": instagram,
+            "twitter": twitter,
+            "linkedin": linkedin
+        }
+
+        # Ensure list format for array fields
+        industries = data.get('industries', [])
+        if not isinstance(industries, list):
+            industries = [industries]
+
+        content_types = data.get('contentTypes', [])
+        if not isinstance(content_types, list):
+            content_types = [content_types]
+
+        brand_personalities = data.get('brandPersonalities', [])
+        if not isinstance(brand_personalities, list):
+            brand_personalities = [brand_personalities]
+
+        target_audience = data.get('targetAudience', [])
+        if not isinstance(target_audience, list):
+            target_audience = [target_audience]
+
+        other_urls = data.get('otherUrls', [])
+        if not isinstance(other_urls, list):
+            other_urls = [other_urls]
+
         profile_data = {
             'user_id': user_id,
             'company': data['company'],
-            'brandVoiceName': data['brandVoiceName'],  # Store brandVoiceName
-            'industries': data['industries'],
+            'brandVoiceName': data['brandVoiceName'],
+            'industries': industries,
             'location': data['location'],
-            'contentTypes': data['contentTypes'],
-            'brandPersonalities': data['brandPersonalities'],
-            'targetAudience': data['targetAudience'],
+            'contentTypes': content_types,
+            'brandPersonalities': brand_personalities,
+            'targetAudience': target_audience,
             'brandTone': data['brandTone'],
             'brandType': data['brandType'],
-            'socialMedia': data['socialMedia'],
-            'otherUrls': data['otherUrls'],
+            'socialMedia': social_media,
+            'otherUrls': other_urls,
             'manualInputText': data['manualInputText'],
             'designText': data['designText'],
             'created_at': datetime.utcnow(),
             'updated_at': datetime.utcnow()
         }
 
+        # Save the brand profile to MongoDB
         profile_id = create_brand_profile(user_id, profile_data)
 
-        # Generate Brand Voice using the provided functions
-        # Extract necessary fields from the profile_data
+        # Extract necessary fields for brand_info_scrape
         company = data['company']
-        brand_voice_name = data['brandVoiceName']  # Extract brandVoiceName
-        industries = data['industries']
+        brand_voice_name = data['brandVoiceName']
         location = data['location']
-        content_types = data['contentTypes']
-        brand_personalities = data['brandPersonalities']
-        target_audience = data['targetAudience']
         brand_tone = data['brandTone']
         brand_type = int(data['brandType'])  # Assuming brandType is sent as string in frontend
 
-        # Extract other necessary fields
-        manual_urls = data.get('otherUrls', [])
+        manual_urls = other_urls
         attachments = []  # Assuming attachments are handled elsewhere
         manual_input_text = data.get('manualInputText', '')
         design_text = data.get('designText', '')
 
-        # Run the brand_info_scrape function asynchronously
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        summary, cost = loop.run_until_complete(
-            brand_info_scrape(
+        # Prepare usernames as a list
+        usernames = []
+        if instagram:
+            usernames.append(instagram)
+        if twitter:
+            usernames.append(twitter)
+        # Add more usernames if needed
+
+        async def run_async_tasks():
+            # Run brand_info_scrape
+            total_cost = 0
+            summary, cost = await brand_info_scrape(
                 company=company,
                 industries=industries,
                 manual_urls=manual_urls,
@@ -1046,14 +1401,24 @@ def create_brand():
                 brand_tone=brand_tone,
                 brand_type=brand_type
             )
-        )
-        loop.close()
+            total_cost += cost
+            descriptions, cost = await brand_post_info_scrape([instagram])
+            total_cost += cost
+            sum_posts_data, cost = image_out_summ(descriptions)
+            total_cost += cost
+            return summary, total_cost, sum_posts_data
 
-        # Prepare the brand voice data using brandVoiceName from user
+        # Create and run the event loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        summary, total_cost, insta_descriptions = loop.run_until_complete(run_async_tasks())
+        loop.close()
+        # print(insta_descriptions)
+        # Prepare the brand voice data
         voice_data = {
-            'voiceName': data['brandVoiceName'],  # Use brandVoiceName from user
-            'audience': data['targetAudience'],
+            'voiceName': brand_voice_name,
             'summary': summary,
+            'instagramDescriptions': insta_descriptions,
             'created_at': datetime.utcnow(),
             'updated_at': datetime.utcnow()
         }
@@ -1061,7 +1426,11 @@ def create_brand():
         # Save the brand voice to MongoDB
         create_brand_voice(profile_id, voice_data)
 
-        return jsonify({'msg': 'Brand profile created and brand voice generated successfully.', 'summary': summary, 'cost': cost}), 201
+        return jsonify({
+            'msg': 'Brand profile created successfully.',
+            'summary': voice_data['summary'],
+            'instagramDescriptions': insta_descriptions,
+        }), 201
 
     except Exception as e:
         logging.exception("Error in /brand/create POST route")
@@ -1071,52 +1440,75 @@ def create_brand():
 # Apply nest_asyncio to allow nested event loops (necessary for certain environments)
 nest_asyncio.apply()
 
-
 @brand_voice_bp.route('/profile', methods=['GET'])
 @jwt_required()
 def get_profile():
-    """
-    Retrieve the authenticated user's brand profile and associated brand voice.
-    """
     try:
-        # Retrieve the user ID from the JWT token
         user_id = get_jwt_identity()
-        
+
         # Fetch the brand profile from MongoDB
         brand_profile = get_brand_profile(user_id)
-        
         if not brand_profile:
             return jsonify({'error': 'Brand profile not found.'}), 404
-        
-        # Fetch the brand voice associated with the brand profile
+
+        # Fetch the associated brand voice
         brand_voice = get_brand_voice(brand_profile['_id'])
-        
-        # If brand voice does not exist, notify the frontend
         if not brand_voice:
             return jsonify({'error': 'Brand voice not found for this profile.'}), 404
+        # Retrieve Instagram descriptions and total cost from brand_voice
+        insta_descriptions = brand_voice.get("instagramDescriptions", "")
         
+        # Ensure all array fields are lists
+        target_audience = brand_profile.get("targetAudience", [])
+        if not isinstance(target_audience, list):
+            target_audience = [target_audience]
+
+        industries = brand_profile.get("industries", [])
+        if not isinstance(industries, list):
+            industries = [industries]
+
+        content_types = brand_profile.get("contentTypes", [])
+        if not isinstance(content_types, list):
+            content_types = [content_types]
+
+        brand_personalities = brand_profile.get("brandPersonalities", [])
+        if not isinstance(brand_personalities, list):
+            brand_personalities = [brand_personalities]
+
+        other_urls = brand_profile.get("otherUrls", [])
+        if not isinstance(other_urls, list):
+            other_urls = [other_urls]
+
+        # Prepare and validate social media data for frontend
+        social_media = brand_profile.get("socialMedia", {})
+        response_social_media = {
+            "instagram": social_media.get("instagram", ""),
+            "twitter": social_media.get("twitter", ""),
+            "linkedin": social_media.get("linkedin", "")
+        }
+
         # Prepare the response data
         response_data = {
             "company": brand_profile.get("company", ""),
-            "industries": brand_profile.get("industries", []),
+            "industries": industries,
             "location": brand_profile.get("location", ""),
-            "contentTypes": brand_profile.get("contentTypes", []),
-            "brandPersonalities": brand_profile.get("brandPersonalities", []),
-            "targetAudience": brand_profile.get("targetAudience", []),
+            "contentTypes": content_types,
+            "brandPersonalities": brand_personalities,
+            "targetAudience": target_audience,
             "brandTone": brand_profile.get("brandTone", ""),
             "brandType": brand_profile.get("brandType", ""),
-            "socialMedia": brand_profile.get("socialMedia", {}),
-            "otherUrls": brand_profile.get("otherUrls", []),
+            "socialMedia": response_social_media,
+            "otherUrls": other_urls,
             "manualInputText": brand_profile.get("manualInputText", ""),
             "designText": brand_profile.get("designText", ""),
             "brandVoice": {
                 "voiceName": brand_voice.get("voiceName", ""),
                 "summary": brand_voice.get("summary", ""),
+                "instagramDescriptions": insta_descriptions,
             }
         }
-        
+
         return jsonify(response_data), 200
-    
+
     except Exception as e:
-        logging.exception("Error in /brand/profile GET route")
         return jsonify({'error': 'An internal server error occurred.'}), 500
