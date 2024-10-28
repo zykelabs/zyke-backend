@@ -79,6 +79,7 @@ def register():
         "last_name": last_name,
         "auth_provider": "manual",
         "provider_id": None,
+        "credits":3,
         "created_at": datetime.utcnow(),
         "updated_at": datetime.utcnow(),
         "otp_verified": False,
@@ -303,41 +304,4 @@ def oauth_login():
             logging.error("General error creating Razorpay customer: %s", str(e))
             return jsonify({"msg": "OAuth login successful, but failed to create payment profile due to an unexpected error."}), 200
 
-    return jsonify({"msg": "OAuth login successful"}), 200  # Ensure the response is JSON
-
-# # Set Account Type
-# @auth_bp.route('/set-account-type', methods=['POST'])
-# @cross_origin()
-# @jwt_required()
-# def set_account_type():
-#     """
-#     Endpoint to set the account type for an authenticated user.
-#     Expects JSON payload: { "account_type": "big_brands" }
-#     """
-#     data = request.get_json()
-#     if not data or 'account_type' not in data:
-#         return jsonify({'error': 'Missing account_type in request.'}), 400
-
-#     account_type = data['account_type']
-#     valid_account_types = ['big_brands', 'startup_smb', 'individual_creators', 'ecommerce_sellers']
-#     if account_type not in valid_account_types:
-#         return jsonify({'error': 'Invalid account_type provided.'}), 400
-
-#     try:
-#         # Retrieve the user ID from the JWT token
-#         user_id = get_jwt_identity()
-
-#         # Update the user's account_type in the database
-#         result = users_collection.update_one(
-#             {'_id': user_id},
-#             {'$set': {'account_type': account_type}}
-#         )
-
-#         if result.modified_count == 0:
-#             return jsonify({'message': 'Account type was already set.'}), 200
-
-#         return jsonify({'message': 'Account type set successfully.'}), 200
-
-#     except Exception as e:
-#         logging.exception("Failed to set account type.")
-#         return jsonify({'error': 'Failed to set account type.'}), 500
+    return jsonify({"msg": "OAuth login successful"}), 200

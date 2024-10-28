@@ -38,6 +38,7 @@ class Config:
     DEEPINFRA_API_KEY = os.environ.get('DEEPINFRA_API_KEY')
     OPENROUTER_API_KEY = os.environ.get('OPENROUTER_API_KEY')
     PERPLEXITY_TOKEN = os.environ.get('PERPLEXITY_TOKEN')
+    TOGETHER_API_KEY = os.environ.get('TOGETHER_API_KEY')
     
     # Google search API Secrets
     GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY')

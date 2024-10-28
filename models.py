@@ -31,6 +31,7 @@ def create_user(user_data):
     user_data.setdefault("auth_provider", "manual")
     user_data.setdefault("provider_id", None)
     user_data.setdefault("otp_verified", False)
+    user_data.setdefault("credits", 3.0)  # Set default credits
 
     result = users_collection.insert_one(user_data)
     return str(result.inserted_id)
@@ -191,3 +192,16 @@ def get_user_by_razorpay_customer_id(razorpay_customer_id):
     Retrieves a user by their Razorpay customer ID.
     """
     return users_collection.find_one({'razorpay_customer_id': razorpay_customer_id})
+
+def get_user_credits(user_id):
+    """Retrieve the current credits for a user by user_id."""
+    user = users_collection.find_one({"_id": ObjectId(user_id)}, {"credits": 1})
+    return user.get("credits") if user else None
+
+def update_user_credits(user_id, credits):
+    """Update a user's credits."""
+    result = users_collection.update_one(
+        {"_id": ObjectId(user_id)},
+        {"$set": {"credits": credits, "updated_at": datetime.utcnow()}}
+    )
+    return result.modified_count > 0
