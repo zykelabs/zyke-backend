@@ -1,5 +1,6 @@
 from openai import OpenAI
 import httpx
+import logging
 from pymongo import ReplaceOne
 import os
 import requests
@@ -13,11 +14,17 @@ import asyncio
 import base64
 from pymongo import MongoClient
 from IPython.display import display
+from bson import ObjectId
 from pymongo.collection import Collection
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from config import Config
+from models import get_user_credits,get_brand_profile,get_brand_voice,deduct_and_log_user_credits
+# Configure logger
+logging.basicConfig(level=logging.ERROR)
+logger = logging.getLogger(__name__)
 
+together_api_key = Config.TOGETHER_API_KEY
 together_api_key = Config.TOGETHER_API_KEY
 open_router_api_key = Config.OPENROUTER_API_KEY
 
@@ -30,10 +37,10 @@ brand_profiles_collection: Collection = db['brand_profiles']
 brand_voices_collection: Collection = db['brand_voices']
 
 # Initialize Collections
-user_last_post_collection = db['user_last_post']
+user_last_posts_collection = db['user_last_post']
 
 # Ensure index for uniqueness
-user_last_post_collection.create_index('user_id', unique=True)
+user_last_posts_collection.create_index('user_id', unique=True)
 
 # Ensure indexes for faster queries and uniqueness
 brand_profiles_collection.create_index('user_id', unique=True)
@@ -475,54 +482,58 @@ def generate_posts_api():
     num = data.get('num', 0)
     platform = data.get('platform', "")
     
+    # Validate required fields
+    if not ideas or not num or not platform:
+        return jsonify({"error": "Required inputs are missing."}), 400
+
     try:
-        brand_profile = brand_profiles_collection.find_one({'user_id': user_id})
+        # Step 1: Retrieve user credits
+        user_credits = get_user_credits(user_id)
+        if user_credits is None:
+            return jsonify({"error": "User not found"}), 404
+          
+        # Check if the user has enough credits
+        if user_credits <= 0:
+            return jsonify({"error": "Insufficient credits to generate posts."}), 402
+
+        # Step 2: Fetch the brand profile
+        brand_profile = get_brand_profile(user_id)
         if not brand_profile:
             return jsonify({"error": "Brand profile not found for the user."}), 401
-        
-        # print(user_id)
 
         brand_profile_id = brand_profile.get('_id')
         if not brand_profile_id:
             return jsonify({"error": "Brand profile ID missing."}), 402
-        
-        # print(brand_profile_id)
 
-        # Step 2: Fetch the brand voice using brand_profile_id
-        brand_voice = brand_voices_collection.find_one({'brand_profile_id': brand_profile_id})
+        # Step 3: Fetch the brand voice using brand_profile_id
+        brand_voice = get_brand_voice(brand_profile_id)
         if not brand_voice:
             return jsonify({"error": "Brand voice not found for the user."}), 403
 
-        # Step 3: Extract required fields from brand_voice
+        # Step 4: Extract required fields from brand_voice
         structured_brand_voice = brand_voice.get('summary', "")
         brand_voice_posts_data = brand_voice.get('instagramDescriptions', "")
-        
+
         if not brand_voice_posts_data or not structured_brand_voice:
             return jsonify({"error": "Brand voice fields (summary or instagramDescriptions) not found for the user."}), 404
-    
-    # Step 4: Extract company information from brand_profile (assuming it exists)
+
+        # Step 5: Extract company information from brand_profile (assuming it exists)
         company = brand_profile.get('company', "")
         if not company:
             return jsonify({"error": "Company information missing in brand profile."}), 405
 
     except Exception as e:
-        print(f"Database fetch error: {e}")
+        logger.error(f"Failed to fetch brand data: {e}")
         return jsonify({"error": "Failed to fetch brand data."}), 501
-    
-    # Validate required fields
-    if not ideas or not num or not platform:
-        return jsonify({"error": "Required inputs are missing."}), 400
-    
+
     try:
-        
+        # Create the idea text for post generation
         idea_text = f"Generate me {platform} posts on the given ideas. Generate {num} posts for each provided idea. Generate multiple images for each post, creating a story or a theme for each post. Keep some variation in the number of images per post, do not just make all posts have a certain number of images.\n\n\n## **Ideas:**\n\n\n"
-        
+
         for idea in ideas:
             idea_text += f"Idea: {idea[0]}\n\n{idea[1]}\n\n\n"
         idea_text += "\n\n"
-        
-        # print(company,"\n\n\n",structured_brand_voice[:100],"\n\n\n",brand_voice_posts_data[:100],"\n\n\n",idea_text,"\n\n\n")
-        
+
         # Call the asynchronous generate_content_async function
         posts_dict, costs = asyncio.run(generate_content_async(
             idea=idea_text,
@@ -530,20 +541,34 @@ def generate_posts_api():
             brand_voice_posts_data=brand_voice_posts_data,
             company=company
         ))
-        
+
+        if posts_dict == -1:
+            return jsonify({"error": "Failed to generate posts"}), 502
+
+        # Deduct credits and log the transaction
+        deduction_description = f"Generate {num} {platform} posts"
+        success, error_msg = deduct_and_log_user_credits(user_id, costs, deduction_description, transaction_type="generate_posts")
+        if not success:
+            # Return the specific error message captured
+            return jsonify({"error": error_msg}), 500
+
         # Save posts_dict to MongoDB with user_id
         update_request = ReplaceOne(
             {'user_id': user_id},
             {'user_id': user_id, 'posts': posts_dict},
             upsert=True
         )
-        user_last_post_collection.bulk_write([update_request])
-        
+        user_last_posts_collection.bulk_write([update_request])
+
+        # Fetch updated credits
+        updated_credits = get_user_credits(user_id)
+
         # Return the generated posts dictionary as JSON
         return jsonify({
-            "saved": "True",
+            "saved": True,
+            "remainingCredits": updated_credits  # Updated credits after deduction
         }), 200
-    
+
     except Exception as e:
-        print(f"Error in generate_ideas_api: {e}")
+        logger.error(f"Error in /fetch_posts: {e}")
         return jsonify({"error": "Internal server error"}), 503

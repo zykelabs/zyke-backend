@@ -23,6 +23,7 @@ from collections import deque
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from config import Config
+from models import get_user_credits,deduct_and_log_user_credits
 
 # Get the absolute path of the current file
 file_path = os.path.abspath(__file__)
@@ -42,6 +43,7 @@ credentials = Credentials.from_service_account_file(
 repurpose_bp = Blueprint('repurpose', __name__)
 
 def get_insta_post(urls, post_type):
+  # print("URLS: ",urls)
   # Replace 'your_token' with the actual token
   token = Config.BRIGHT_DATA_TOKEN
 
@@ -61,11 +63,17 @@ def get_insta_post(urls, post_type):
     ur = ur.rstrip('/')
     ur = ur.replace("reels","reel")
     data.append({"url": ur})
+    
+  # print(url)
+  # print(data)
+  # print(headers)
 
   # Make the request
   response = requests.post(url, headers=headers, json=data).json()
   # print(response)
   # print(response.json())
+  
+  # print(response)
 
   snapshot_id = response['snapshot_id']
 
@@ -75,6 +83,9 @@ def get_insta_post(urls, post_type):
   headers = {
       "Authorization": f"Bearer {token}",
   }
+  
+  # print(url)
+  # print(headers)
 
   # Make the request
   response = requests.get(url, headers=headers).json()
@@ -83,6 +94,8 @@ def get_insta_post(urls, post_type):
     if 'Snapshot is not ready yet' in response['message']:
       time.sleep(11)
       response = requests.get(url, headers=headers).json()
+      
+  # print(response[0]['video_url'])
 
   # print(len(response))
 
@@ -680,6 +693,9 @@ async def repurpose_link (url, content_type, user_id):
     topic, summary, description, cost = await post_description_text(url, content_type)
   return topic, summary, description, cost
 
+# Configure logging for the repurpose_content function
+logger = logging.getLogger(__name__)
+
 @repurpose_bp.route('/repurpose_url', methods=['POST'])
 @jwt_required()
 def repurpose_content():
@@ -688,12 +704,45 @@ def repurpose_content():
     url = data.get('url')
     content_type = data.get('content_type')
     
+    # print(url)
+
     if not url or not content_type:
         return jsonify({'error': 'url and content_type are required'}), 400
 
     try:
+        # Fetch the user's current credits
+        user_credits = get_user_credits(user_id)
+        if user_credits is None:
+            return jsonify({'error': 'User not found'}), 404
+        
+        # Check if the user has enough credits
+        if user_credits <= 0:
+            return jsonify({'error': 'Insufficient credits to repurpose content.'}), 402
+
+        # Call the asynchronous repurpose_link function to get the cost
         topic, summary, description, cost = asyncio.run(repurpose_link(url, content_type, user_id))
-        # print(cost)
-        return jsonify({'topic': topic, 'summary': summary, 'description': description}), 200
+        
+        # print(topic,summary,description)
+        
+        # Deduct credits and log the transaction
+        deduction_description = f"Repurpose content for URL: {url}"
+        success, error_msg = deduct_and_log_user_credits(user_id, cost, deduction_description, transaction_type="repurpose_content")
+        
+        if not success:
+            # Return the specific error message captured
+            return jsonify({"error": error_msg}), 500
+
+        # Fetch updated credits
+        updated_credits = get_user_credits(user_id)
+
+        # Return the repurposed content along with the topic and description
+        return jsonify({
+            'topic': topic,
+            'summary': summary,
+            'description': description,
+            'remainingCredits': updated_credits  # Updated credits after deduction
+        }), 200
+
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Error in repurpose_content: {e}")
+        return jsonify({'error': 'An internal server error occurred.'}), 500

@@ -6,6 +6,7 @@ from config import Config
 import requests
 from pymongo import MongoClient
 from datetime import datetime, timedelta
+from models import log_credit_usage
 
 # Load environment variables (ensure that PERPLEXITY_TOKEN is set in config.py or env)
 PERPLEXITY_TOKEN = Config.PERPLEXITY_TOKEN
@@ -137,7 +138,16 @@ def get_trends():
             "trends": trends,
             "timestamp": current_time
         })
+        
+        # Check if the user has enough credits and deduct them if so
+        deduction_description = f"Fetched Trends"
+        user_id = "zyke_admin"
+        success, error_msg = log_credit_usage(user_id, costs, deduction_description, transaction_type="fetch_trends")
 
+        if not success:
+            # Return the specific error message captured
+            return jsonify({"error": error_msg}), 500
+        
         return jsonify({"trends": trends}), 200
     except Exception as e:
         print(f"Error in fetching trends: {e}")

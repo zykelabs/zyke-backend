@@ -23,8 +23,11 @@ from models import (
     create_brand_voice,
     update_brand_voice,
     create_brand_profile,
-    get_brand_voice
+    get_brand_voice,
+    get_user_credits,
+    deduct_and_log_user_credits
 )
+from bson import ObjectId
 import jwt
 from io import BytesIO
 from flask_jwt_extended import get_jwt_identity, jwt_required
@@ -33,6 +36,12 @@ import os
 from PIL import Image
 import pandas as pd
 import base64
+import json
+from httplib2 import Http
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 # Initialize blueprint
 brand_voice_bp = Blueprint('brand_voice_info', __name__)
 
@@ -43,12 +52,17 @@ deepinfra_client = AsyncOpenAI(
     base_url="https://api.deepinfra.com/v1/openai",
 )
 
-client_open_router = OpenAI(
+client_openai_image_desc = AsyncOpenAI(
+    api_key=Config.OPENAI_API_KEY,)
+
+client_open_router = AsyncOpenAI(
     api_key=Config.OPENROUTER_API_KEY,
     base_url="https://openrouter.ai/api/v1",
 )
 
-client_openai_summ = OpenAI(
+# print(client_open_router)
+
+client_openai_summ = AsyncOpenAI(
     api_key=Config.OPENROUTER_API_KEY,
     base_url="https://openrouter.ai/api/v1",
 )
@@ -62,94 +76,97 @@ perplexity_token = Config.PERPLEXITY_TOKEN
 google_api_key = Config.GOOGLE_API_KEY
 google_cse_id = Config.GOOGLE_CSE_ID
 
-def search_webs(trend, nums = 10, delay=None):
+# Customize timeout
+custom_http = Http(timeout=300)
 
-    api_key = google_api_key
-    cse_id = google_cse_id
+# def search_webs(trend, nums = 10, delay=None):
 
-    if not api_key or not cse_id:    # Assuming you have these variables set
-        raise ValueError("Please set GOOGLE_API_KEY and GOOGLE_CSE_ID environment variables")
+#     api_key = google_api_key
+#     cse_id = google_cse_id
 
-    service = build("customsearch", "v1", developerKey=api_key)
+#     if not api_key or not cse_id:    # Assuming you have these variables set
+#         raise ValueError("Please set GOOGLE_API_KEY and GOOGLE_CSE_ID environment variables")
 
-    result = None
+#     service = build("customsearch", "v1", developerKey=api_key, http=custom_http)
 
-    # Set the date range for the last delay
-    if delay is not None:
-      date = datetime.now() - timedelta(days=delay)
-      date_restrict = f"d{delay}"
+#     result = None
 
-      # print(f"Date Restrict : {date_restrict}")
+#     # Set the date range for the last delay
+#     if delay is not None:
+#       date = datetime.now() - timedelta(days=delay)
+#       date_restrict = f"d{delay}"
 
-      result = service.cse().list(q=trend, cx=cse_id, gl='countryIN', num=nums, dateRestrict=date_restrict).execute()
+#       # print(f"Date Restrict : {date_restrict}")
 
-    else:
-      result = service.cse().list(q=trend, cx=cse_id, gl='countryIN', num=nums).execute()
+#       result = service.cse().list(q=trend, cx=cse_id, gl='countryIN', num=nums, dateRestrict=date_restrict).execute()
 
-    if 'items' in result:
-        return result['items'], 0.005
-    else:
-        return -1, 0
+#     else:
+#       result = service.cse().list(q=trend, cx=cse_id, gl='countryIN', num=nums).execute()
+
+#     if 'items' in result:
+#         return result['items'], 0.005
+#     else:
+#         return -1, 0
     
-async def scrape_website(url):
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                          'AppleWebKit/537.36 (KHTML, like Gecko) '
-                          'Chrome/92.0.4515.131 Safari/537.36',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Sec-Fetch-User': '?1',
-            'Referer': 'https://www.google.com/',
-            'DNT': '1',  # Do Not Track request header
-        }
+# async def scrape_website(url):
+#     try:
+#         headers = {
+#             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+#                           'AppleWebKit/537.36 (KHTML, like Gecko) '
+#                           'Chrome/92.0.4515.131 Safari/537.36',
+#             'Accept-Language': 'en-US,en;q=0.9',
+#             'Accept-Encoding': 'gzip, deflate, br',
+#             'Connection': 'keep-alive',
+#             'Upgrade-Insecure-Requests': '1',
+#             'Sec-Fetch-Dest': 'document',
+#             'Sec-Fetch-Mode': 'navigate',
+#             'Sec-Fetch-Site': 'none',
+#             'Sec-Fetch-User': '?1',
+#             'Referer': 'https://www.google.com/',
+#             'DNT': '1',  # Do Not Track request header
+#         }
 
-        async with aiohttp.ClientSession(headers=headers) as session:
-            try:
-                async with session.get(url, timeout=60) as response:
-                    response.raise_for_status()  # Raise exception for bad status codes
+#         async with aiohttp.ClientSession(headers=headers) as session:
+#             try:
+#                 async with session.get(url, timeout=60) as response:
+#                     response.raise_for_status()  # Raise exception for bad status codes
 
-                    # Check if the content is Brotli-encoded
-                    if response.headers.get('Content-Encoding') == 'br':
-                        raw_data = await response.read()
-                        try:
-                            # Manually decompress Brotli-encoded content
-                            html = brotli.decompress(raw_data).decode('utf-8', errors='ignore')
-                        except brotli.error:
-                            # print("Brotli decompression failed.")
-                            return "No information found."
-                    else:
-                        # For other encodings like gzip or deflate
-                        html = await response.text()
+#                     # Check if the content is Brotli-encoded
+#                     if response.headers.get('Content-Encoding') == 'br':
+#                         raw_data = await response.read()
+#                         try:
+#                             # Manually decompress Brotli-encoded content
+#                             html = brotli.decompress(raw_data).decode('utf-8', errors='ignore')
+#                         except brotli.error:
+#                             # print("Brotli decompression failed.")
+#                             return "No information found."
+#                     else:
+#                         # For other encodings like gzip or deflate
+#                         html = await response.text()
 
-                    # Parse the HTML content
-                    soup = BeautifulSoup(html, 'html.parser')
+#                     # Parse the HTML content
+#                     soup = BeautifulSoup(html, 'html.parser')
 
-                    # Example: Extract all paragraph texts
-                    paragraphs = soup.find_all('p')
-                    txt = "".join([p.get_text() for p in paragraphs])
+#                     # Example: Extract all paragraph texts
+#                     paragraphs = soup.find_all('p')
+#                     txt = "".join([p.get_text() for p in paragraphs])
 
-                    return txt
+#                     return txt
 
-            except asyncio.TimeoutError:
-                print("Timed out :(")
-                return "No information found."
-            except aiohttp.ClientResponseError as e:
-                # print(f"HTTP error occurred: {e.status} {e.message}")
-                return "No information found."
-            except Exception as e:
-                # print(f"An unexpected error occurred: {e}")
-                return "No information found."
+#             except asyncio.TimeoutError:
+#                 print("Timed out :(")
+#                 return "No information found."
+#             except aiohttp.ClientResponseError as e:
+#                 # print(f"HTTP error occurred: {e.status} {e.message}")
+#                 return "No information found."
+#             except Exception as e:
+#                 # print(f"An unexpected error occurred: {e}")
+#                 return "No information found."
 
-    except aiohttp.ClientError as e:
-        # print(f"Client error occurred: {e}")
-        return "No information found."
-    
+#     except aiohttp.ClientError as e:
+#         # print(f"Client error occurred: {e}")
+#         return "No information found."
+
 class AsyncMultilingualScraper:
     def __init__(
         self,
@@ -455,47 +472,47 @@ async def scrape_example(url):
     except:
       return "No information found"
   
-async def url_summ(text):
-  chat_history = [{"role": "system","content":
-'''**Role:**
-You are a chatbot responsible for summarizing articles about a brand that have been scraped from a website.
+# async def url_summ(text):
+#   chat_history = [{"role": "system","content":
+# '''**Role:**
+# You are a chatbot responsible for summarizing articles about a brand that have been scraped from a website.
 
-**Task:**
-You will receive a query that was searched on Google, along with the content of an article scraped from a website related to that query. Your task is to summarize the article, ensuring that the summary includes all the important points while painting a complete picture of the information. The summary should be concise, brief, and directly related to the query.
+# **Task:**
+# You will receive a query that was searched on Google, along with the content of an article scraped from a website related to that query. Your task is to summarize the article, ensuring that the summary includes all the important points while painting a complete picture of the information. The summary should be concise, brief, and directly related to the query.
 
-**Instructions:**
-1. **Summarize relevant content only**: Focus on summarizing only the information that is directly or indirectly related to the search query. Ignore any unrelated content such as website advertisements, website info, or other irrelevant articles.
+# **Instructions:**
+# 1. **Summarize relevant content only**: Focus on summarizing only the information that is directly or indirectly related to the search query. Ignore any unrelated content such as website advertisements, website info, or other irrelevant articles.
 
-2. **Complete and concise**: Make sure your summary includes all relevant points and presents the full picture, but in a shortened and simple format. Avoid leaving out key information related to the query.
+# 2. **Complete and concise**: Make sure your summary includes all relevant points and presents the full picture, but in a shortened and simple format. Avoid leaving out key information related to the query.
 
-3. **Avoid unnecessary details**: Do not include unrelated information in your response. Stick only to content that matches the query’s topic, title, and description.
+# 3. **Avoid unnecessary details**: Do not include unrelated information in your response. Stick only to content that matches the query’s topic, title, and description.
 
-4. **No additional information**: Do not search for information, rely on your memory, or simulate a response. If no relevant information is provided, respond with:
-   - "No information was provided" if no content is available.
-   - "The information provided is not related to the search query" if the content does not match the query.
+# 4. **No additional information**: Do not search for information, rely on your memory, or simulate a response. If no relevant information is provided, respond with:
+#    - "No information was provided" if no content is available.
+#    - "The information provided is not related to the search query" if the content does not match the query.
 
-**Purpose:**
-Your summaries will provide key insights from articles related to brands, focusing on relevant information from the scraped website content. These summaries are used to better understand a brand's online presence and messaging while avoiding irrelevant details.'''},
-                  {
-              "role": "user",
-              "content": text,
-          }]
+# **Purpose:**
+# Your summaries will provide key insights from articles related to brands, focusing on relevant information from the scraped website content. These summaries are used to better understand a brand's online presence and messaging while avoiding irrelevant details.'''},
+#                   {
+#               "role": "user",
+#               "content": text,
+#           }]
 
-  response_content = ""
-  try:
-    chat_completion = await deepinfra_client.chat.completions.create(
-                              model="meta-llama/Meta-Llama-3.1-8B-Instruct",
-                              messages=chat_history,
-                              max_tokens=2048,
-                              temperature=0.1)
+#   response_content = ""
+#   try:
+#     chat_completion = await deepinfra_client.chat.completions.create(
+#                               model="meta-llama/Meta-Llama-3.1-8B-Instruct",
+#                               messages=chat_history,
+#                               max_tokens=2048,
+#                               temperature=0.1)
 
-    cost = (chat_completion.usage.prompt_tokens * 0.055 + chat_completion.usage.completion_tokens * 0.055) / (10**6)
+#     cost = (chat_completion.usage.prompt_tokens * 0.055 + chat_completion.usage.completion_tokens * 0.055) / (10**6)
 
-    return chat_completion.choices[0].message.content, cost
+#     return chat_completion.choices[0].message.content, cost
 
-  except Exception as e:
-    print(e)
-    return ("Error: " + str(e)), 0
+#   except Exception as e:
+#     print(e)
+#     return ("Error: " + str(e)), 0
 
 async def url_summ2(text):
   chat_history = [{"role": "system","content":
@@ -521,65 +538,65 @@ async def url_summ2(text):
     print(e)
     return ("Error: " + str(e)), 0
 
-async def query_summ(text):
-  chat_history = [{"role": "system","content":
-'''**Role:**
-You are a chatbot responsible for effectively summarizing information gathered from various online sources.
+# async def query_summ(text):
+#   chat_history = [{"role": "system","content":
+# '''**Role:**
+# You are a chatbot responsible for effectively summarizing information gathered from various online sources.
 
-**Task:**
-You will receive information about a particular search query, collected from the top search results on Google. Your role is to create an exhaustive summary of this information, ensuring it is non-repetitive, concise, and includes all relevant details from the various sources provided. Your summary should cover the entire content while avoiding redundancy and unnecessary details.
+# **Task:**
+# You will receive information about a particular search query, collected from the top search results on Google. Your role is to create an exhaustive summary of this information, ensuring it is non-repetitive, concise, and includes all relevant details from the various sources provided. Your summary should cover the entire content while avoiding redundancy and unnecessary details.
 
-**Format:**
-You will receive input in the following format:
-```
-Search Query: <search query>
+# **Format:**
+# You will receive input in the following format:
+# ```
+# Search Query: <search query>
 
-a. Title: <title>, Website: <website>
-Content Summary: <summary>
+# a. Title: <title>, Website: <website>
+# Content Summary: <summary>
 
-b. Title: <title>, Website: <website>
-Content Summary: <summary>
-```
+# b. Title: <title>, Website: <website>
+# Content Summary: <summary>
+# ```
 
-**Instructions:**
-1. **Summarize without repetition**: Each source may contain overlapping information. Your task is to ensure that the final summary includes all relevant content from different sources without repeating the same points.
+# **Instructions:**
+# 1. **Summarize without repetition**: Each source may contain overlapping information. Your task is to ensure that the final summary includes all relevant content from different sources without repeating the same points.
 
-2. **Cover all relevant points**: The summary must cover all the key details provided in the content summaries, including information about the company’s products, services, mission, market, target audience, competitors, etc.
+# 2. **Cover all relevant points**: The summary must cover all the key details provided in the content summaries, including information about the company’s products, services, mission, market, target audience, competitors, etc.
 
-3. **Contextual understanding of sources**: Use the website name to understand the context of the content. For example:
-   - **Reddit** or public forums likely contain user discussions or opinions.
-   - **Official government or company websites** may contain formal announcements or key information.
-   - **News outlets** might provide articles, insights, or reports.
-   - **Social media handles** could contain public reactions, company updates, or informal discussions.
+# 3. **Contextual understanding of sources**: Use the website name to understand the context of the content. For example:
+#    - **Reddit** or public forums likely contain user discussions or opinions.
+#    - **Official government or company websites** may contain formal announcements or key information.
+#    - **News outlets** might provide articles, insights, or reports.
+#    - **Social media handles** could contain public reactions, company updates, or informal discussions.
 
-   This understanding can help you tailor the summary to capture the most important points depending on the type of source.
+#    This understanding can help you tailor the summary to capture the most important points depending on the type of source.
 
-4. **Simple and concise language**: Make the summary concise, written in clear, simple language that is easy for the reader to follow. Avoid making the summary too long or overly detailed, while still covering all necessary points.
+# 4. **Simple and concise language**: Make the summary concise, written in clear, simple language that is easy for the reader to follow. Avoid making the summary too long or overly detailed, while still covering all necessary points.
 
-**Purpose:**
-Your summary will be used to collect important information about a company, its products, services, and related content. This information is critical for equipping other chatbots that generate content for the company (e.g., social media posts, advertisements) with the necessary context to personalize their outputs and align them with the company’s style and messaging. The quality and accuracy of your summaries are crucial to ensuring these chatbots can create highly relevant, personalized content.'''},
-                  {
-              "role": "user",
-              "content": text,
-          }]
+# **Purpose:**
+# Your summary will be used to collect important information about a company, its products, services, and related content. This information is critical for equipping other chatbots that generate content for the company (e.g., social media posts, advertisements) with the necessary context to personalize their outputs and align them with the company’s style and messaging. The quality and accuracy of your summaries are crucial to ensuring these chatbots can create highly relevant, personalized content.'''},
+#                   {
+#               "role": "user",
+#               "content": text,
+#           }]
 
-  response_content = ""
-  try:
-    chat_completion = await deepinfra_client.chat.completions.create(
-                              model="meta-llama/Meta-Llama-3.1-70B-Instruct",
-                              messages=chat_history,
-                              max_tokens=2048,
-                              temperature=0.1)
+#   response_content = ""
+#   try:
+#     chat_completion = await deepinfra_client.chat.completions.create(
+#                               model="meta-llama/Meta-Llama-3.1-70B-Instruct",
+#                               messages=chat_history,
+#                               max_tokens=2048,
+#                               temperature=0.1)
 
-    cost = (chat_completion.usage.prompt_tokens * 0.35 + chat_completion.usage.completion_tokens * 0.4) / (10**6)
+#     cost = (chat_completion.usage.prompt_tokens * 0.35 + chat_completion.usage.completion_tokens * 0.4) / (10**6)
 
-    return chat_completion.choices[0].message.content, cost
+#     return chat_completion.choices[0].message.content, cost
 
-  except Exception as e:
-    print(e)
-    return ("Error: " + str(e)), 0
+#   except Exception as e:
+#     print(e)
+#     return ("Error: " + str(e)), 0
 
-def final_summ(text, prompt, model):
+async def final_summ(text, prompt, model):
 
   chat_history = [{"role": "system","content": prompt},
                   {
@@ -588,7 +605,7 @@ def final_summ(text, prompt, model):
           }]
 
   try:
-        completion = client_open_router.chat.completions.create(
+        completion = await client_open_router.chat.completions.create(
         model=model[0],
         messages= chat_history,
         temperature=0.3,
@@ -598,16 +615,26 @@ def final_summ(text, prompt, model):
   except Exception as e:
     print(e)
     return ("Error: " + str(e.response.status_code)), 0
-async def fetch_search_info_pplx(text):
+
+async def fetch_search_info_pplx(text, brand_type):
   url = "https://api.perplexity.ai/chat/completions"
 
-  payload = {
-      "model": "llama-3.1-sonar-huge-128k-online",
-      "messages": [
-          {
-              "role": "system",
-              "content": \
-  '''Be precise.
+  sys_prompt = ""
+
+  if brand_type == "big_brands":
+    sys_prompt = '''Be precise.
+  You have the role of searching about information (about a brand) and return the best matching information.
+  Respond in a detailed manner, but only return relevant information.
+  Be as detailed, precise and accurate as possible. Do not compromise on accuracy for over detailing or vice versa.
+
+  **Important:**
+  Do not hallucinate or create information by yourself.
+  Do not confuse some other brand (with a similar name or work) with the current brand.
+  If you do not find information about current brand or find irrelevant information then mention that you were not able to find the required information.
+  Do not respond with unrelated information or false information.'''
+
+  if brand_type == "small_brands":
+    sys_prompt = '''Be precise.
   You have the role of searching about information (about a brand) and return the best matching information.
   Respond in a detailed manner, but only return relevant information.
   You will get some information about a brand as context, to understand which brand we are exactly talking about, the brand will not be very popular and this context would be helpful for your search.
@@ -617,8 +644,14 @@ async def fetch_search_info_pplx(text):
   Do not hallucinate or create information by yourself.
   Do not confuse some other brand (with a similar name or work) with the current brand.
   If you do not find information about current brand or find irrelevant information then mention that you were not able to find the required information.
-  Do not respond with unrelated information or false information.
-  '''
+  Do not respond with unrelated information or false information.'''
+
+  payload = {
+      "model": "llama-3.1-sonar-huge-128k-online",
+      "messages": [
+          {
+              "role": "system",
+              "content": sys_prompt
           },
           {
               "role": "user",
@@ -656,7 +689,7 @@ async def fetch_search_info_pplx(text):
     # print(response.text())
     return "-1", 0
 
-def get_search_query_context(text):
+async def get_search_query_context(text):
   chat_history = [{"role": "system","content":
 '''**System Prompt:**
 You will be provided with the information about a company. You have to return me a small piece of text explaining the basics of the company. What it does, industry, location, .. etc.
@@ -670,7 +703,7 @@ This must help us to uniquely identify the company on the internet. Keep your re
           }]
 
   try:
-        completion = client_open_router.chat.completions.create(
+        completion = await client_open_router.chat.completions.create(
         model= "openai/o1-mini-2024-09-12",
         messages= chat_history,
         temperature=0.4,
@@ -692,69 +725,29 @@ def extract_search_queries(text):
   return queries
 
 async def brand_info_scrape(company, industries, manual_urls, attachments, manual_input_text, design_text, location, content_types, brand_personalities, target_audience, brand_tone, brand_type):
-  queries = [f'{company} company overview',
-  f'{company} about us',
-  f'{company} information',
-  f'{company} history',
-  f'{company} founder story',
-  f'{company} mission statement',
-  f'{company} vision statement',
-  f'{company} core values',
-  f'{company} product differentiation',
+  queries = [f'{company} company overview and history',
+  f'{company} founder history and story',
+  f'{company} core values, mission and vision',
+  f'{company} product and brand differentiation',
   f'{company} recent product launches',
-  f'{company} product positioning',
-  f'{company} pricing strategy',
-  f'{company} market positioning',
-  f'{company} competitors',
-  f'{company} competitive analysis',
-  f'{company} market share trends',
+  f'{company} competitors and market share',
   f'{company} market presence regions',
-  f'industry trends affecting {company}',
-  f'{company} brand positioning',
-  f'{company} overall branding strategy',
-  f'{company} overall marketing strategy',
+  f'{company} marketing and branding strategy',
   f'{company} successful marketing campaigns',
-  f'top innovative marketing tactics used by {company}',
-  f'{company} social media platforms',
-  f'{company} social media strategies',
-  f'{company} popular social campaigns',
-  f'{company} popular social media posts',
-  f'{company} social media posting style',
+  f'{company} social media platforms and posting style',
   f'{company} target audience',
-  f'{company} public perception',
-  f'{company} and customer emotional connections',
-  f'{company} user psyche',
-  f'{company} customer reviews',
-  f'{company} customer testimonials',
-  f'{company} corporate social responsibility',
-  f'{company} sustainability initiatives',
-  f'{company} environmental impact',
-  f'{company} awards and recognitions',
-  f'{company} industry accolades',
-  f'{company} press releases',
-  f'{company} media coverage',
-  f'{company} technological innovations',
-  f'{company} research and development',
-  f'{company} challenges faced',
-  f'{company} legal issues or controversies',
+  f'{company} public perception and customer reviews',
+  f'{company} corporate social responsibility, sustainability initiatives and environmental impact',
+  f'{company} industry accolades, awards and recognitions',
+  f'{company} news, latest announcements and media coverage',
+  f'{company} technological innovations and research and development',
   f'{company} brand voice and tone',
-  f'{company} key messaging',
-  f'{company} tagline and slogans',
+  f'{company} logo, tagline, slogans and key messaging',
   f'{company} brand colors and typography',
-  f'{company} logo usage guidelines',
-  f'{company} customer journey map',
-  f'{company} touchpoints with customers',
-  f'{company} website SEO strategy',
-  f'{company} digital marketing channels',
   f'{company} influencer partnerships',
-  f'{company} affiliate marketing programs',
   f'{company} customer loyalty programs',
-  f'{company} engagement metrics',
-  f'{company} product offerings',
-  f'{company} service offerings',
-  f'{company} subsidiaries',
-  f'{company} brand differentiation',
-  f'{company} latest announcements',]
+  f'{company} product and service offerings and their pricing',
+  f'{company} subsidiaries and sister companies']
 
   costs = 0
   tasks = []
@@ -856,64 +849,66 @@ Ensure the selected information helps guide designers in making highly personali
     results_query_summ = []
 
     if brand_type == 1:
-      URLS = {}
-      for i in range(len(queries)):
-        searches, cost = search_webs(queries[i],10)
+      pplx_brand_type = "big_brands"
+      # URLS = {}
+      # for i in range(len(queries)):
+      #   searches, cost = search_webs(queries[i],10)
+      #   costs += cost
+      #   for j in searches:
+      #     try:
+      #       URLS[queries[i]].append([j['title'],j['snippet'],j['link'],None])
+      #     except:
+      #       URLS[queries[i]] = [[j['title'],j['snippet'],j['link'],None]]
+
+      # scrapes = []
+      # for i in URLS:
+      #   for j in URLS[i]:
+      #     scrapes.append(scrape_website(j[2]))
+      # results_scrape = await asyncio.gather(*scrapes)
+
+      # c = 0
+      # url_summs = []
+
+      # for i in URLS:
+      #   for j in URLS[i]:
+      #     j[-1] = results_scrape[c]
+
+      #     url_prompt = f"Search Query: {i}\n\nContent: {j[3]}"
+      #     temp = url_summ(url_prompt)
+      #     url_summs.append(temp)
+      #     c+=1
+      # results_url_summ = await asyncio.gather(*url_summs)
+
+      # query_summs_prompts = {}
+      # query_summs = []
+      # c2 = 0
+
+      # for i in URLS:
+      #   query_summs_prompts[i] = f"Search Query: {i}\n\n"
+      #   for n,j in enumerate(URLS[i]):
+      #     query_summs_prompts[i] += f'''{chr(97+n)}. Title: {j[0]}, Website: {j[2]}
+      # Content Summary:\n {results_url_summ[c2][0]} \n\n\n'''
+      #     costs += results_url_summ[c2][1]
+      #     c2+=1
+      #   temp2 = query_summ(query_summs_prompts[i])
+      #   query_summs.append(temp2)
+      # results_query_summ = await asyncio.gather(*query_summs)
+
+      if brand_type == 2:
+        pplx_brand_type = "small_brands"
+        context, cost = await get_search_query_context(total_text)
         costs += cost
-        for j in searches:
-          try:
-            URLS[queries[i]].append([j['title'],j['snippet'],j['link'],None])
-          except:
-            URLS[queries[i]] = [[j['title'],j['snippet'],j['link'],None]]
 
-      scrapes = []
-      for i in URLS:
-        for j in URLS[i]:
-          scrapes.append(scrape_website(j[2]))
-      results_scrape = await asyncio.gather(*scrapes)
+        queries = \
+  ["Get me information about its `Company Overview`",
+  "Get me information about its `Product & Services`",
+  "Get me information about its `Market & Competitors`",
+  "Get me information about its `Branding & Marketing`",
+  "Get me information about its `Social Media`",
+  "Get me information about its `Customers, demographics and target audience`",
+  "Get me information about its `Recent updates and news`",]
 
-      c = 0
-      url_summs = []
-
-      for i in URLS:
-        for j in URLS[i]:
-          j[-1] = results_scrape[c]
-
-          url_prompt = f"Search Query: {i}\n\nContent: {j[3]}"
-          temp = url_summ(url_prompt)
-          url_summs.append(temp)
-          c+=1
-      results_url_summ = await asyncio.gather(*url_summs)
-
-      query_summs_prompts = {}
-      query_summs = []
-      c2 = 0
-
-      for i in URLS:
-        query_summs_prompts[i] = f"Search Query: {i}\n\n"
-        for n,j in enumerate(URLS[i]):
-          query_summs_prompts[i] += f'''{chr(97+n)}. Title: {j[0]}, Website: {j[2]}
-      Content Summary:\n {results_url_summ[c2][0]} \n\n\n'''
-          costs += results_url_summ[c2][1]
-          c2+=1
-        temp2 = query_summ(query_summs_prompts[i])
-        query_summs.append(temp2)
-      results_query_summ = await asyncio.gather(*query_summs)
-
-    elif brand_type == 2:
-      context, cost = get_search_query_context(total_text)
-      costs += cost
-
-      queries = \
-["Get me information about its `Company Overview`",
-"Get me information about its `Product & Services`",
-"Get me information about its `Market & Competitors`",
-"Get me information about its `Branding & Marketing`",
-"Get me information about its `Social Media`",
-"Get me information about its `Customers, demographics and target audience`",
-"Get me information about its `Recent updates and news`",]
-
-      queries = [f"Context: {context}\nSearch Query: {query}" for query in queries]
+        queries = [f"Context: {context}\nSearch Query: {query}" for query in queries]
       # queries_raw, cost = get_search_queries(total_text)
       # costs += cost
       # queries = extract_search_queries(queries_raw)
@@ -922,7 +917,7 @@ Ensure the selected information helps guide designers in making highly personali
 
       results_query_summ_async = []
       for query in queries:
-        temp = fetch_search_info_pplx(query)
+        temp = fetch_search_info_pplx(query, pplx_brand_type)
         results_query_summ_async.append(temp)
       results_query_summ = await asyncio.gather(*results_query_summ_async)
 
@@ -933,7 +928,9 @@ Ensure the selected information helps guide designers in making highly personali
       costs += i[1]
       results += '\n\n\n\n'
 
-      results = total_text + "##### Company Data Obtained from search:\n\n" + results
+    # print(results,"\n\n\n\n")
+    results = total_text + "##### Company Data Obtained from search:\n\n" + results
+    # print(results,"\n\n\n\n")
 
   else:
     results = total_text
@@ -958,7 +955,7 @@ For each piece of information, follow these steps:
 
 Since this data will guide an LLM to create social media posts, product descriptions, blogs, and marketing campaigns, ensure your response is structured and highly detailed. Do not omit or summarize any relevant information. Expand upon each point thoroughly to offer a complete, comprehensive analysis that will support creative, personalized content generation.'''
 
-  final_results,cost = final_summ(results, prompt, model)
+  final_results,cost = await final_summ(results, prompt, model)
   costs += cost
   final_results = final_results.replace("#### ", "")
   final_results = final_results.replace("### ", "")
@@ -970,11 +967,10 @@ Since this data will guide an LLM to create social media posts, product descript
   return final_results, costs
 
 #Post Scrapping
-def scrape_instagram(username):
+def scrape_instagram(username, n = 20):
   insta_images = []
-  client_apify = ApifyClient(Config.APIFY_API_KEY)
+  client_apify = ApifyClient('REDACTED_REVOKED_APIFY_TOKEN')
 
-  n = 20
   # Prepare the Actor input
   run_input = {
       "username": username,
@@ -1001,8 +997,11 @@ async def scrape_img(img_url):
     return -1
 
 async def image_desc(content, caption):
-  response = await client_open_router_async.chat.completions.create(
-  model="openai/gpt-4o-mini",
+  # model = "openai/gpt-4o-mini"
+  # response = await client_open_router_async.chat.completions.create(
+  model = "gpt-4o-mini"
+  response = await client_openai_image_desc.chat.completions.create(
+  model=model,
   messages=[
     {"role": "system","content":
 '''Imagine you are both a brand strategist and a graphic designer, tasked with deeply understanding and replicating the visual style of your brand across an entire post containing multiple images. Each image is accompanied by a caption that provides additional context. Your goal is to create an exhaustive, highly detailed description of the entire post and each individual image to ensure consistency in future posts and designs.
@@ -1110,13 +1109,13 @@ Image 3:
 
   return (response.choices[0].message.content,cost,caption)
 
-def image_out_summ(text):
+async def image_out_summ(text):
   chat_history = [{"role": "system","content":
 '''**Instruction:**
 
 You are tasked with structuring the textual description of a collection of highly detailed social media posts from a specific brand. The posts are organized in reverse chronological order, with the most recent posts appearing first. The posts themselves are not provided, rather their extremely detailed descriptions are provided. Each post includes a caption and descriptions of multiple images, focusing on their composition, messaging, color palette, and branding elements. **Please note that each post may contain multiple images, and the description for each post includes both a general overview of the post and individual explanations for each image. Ensure that you understand the difference between the overall post content and the specific individual image details during structuring. Also, in these instructions, by "posts," we mean the entire post, not the individual images.** The objective is to condense the information while preserving the essence of the brand's style and core attributes.
-
-**Note: You have to keep the description long and detailed. It must be so that a new graphic designer, after reading through it can understand the psychology of the brand, its posting style, and its marketing methods and also get a visual understanding of how the posts look, just by reading it. It should be enough to make the designer visualize each and every aspect of post-designing and post-creation. It should also give him a sense of what type of posts the brand creates, like funny, informative, humorous, witty, youthful, etc. There should also be a number of post examples, at least 10, which should represent a diverse range of posts and should give the designer an idea about the posts. It should be extensive, comprehensive, and detailed. But it should be concise at the same time. It should not contain repetitive information or unnecessary things. Thus, you have to properly structure it, describing the posting, marketing, .. styles, and also make it to the point, so that it is not overly lengthy to read.**
+**Give extremely detailed responses, describing the brand's post in a highly extensive manner, keeping your response comprehensive, large and detailed. Do not compress on the information provided and capture every minute aspect. Summarisation would lead to information loss and thus detoriation of quality.**
+**Note: You have to keep the description long and detailed. It must be so that a new graphic designer, after reading through it can understand the psychology of the brand, its posting style, and its marketing methods and also get a visual understanding of how the posts look, just by reading it. It should be enough to make the designer visualize each and every aspect of post-designing and post-creation. It should also give him a sense of what type of posts the brand creates, like funny, informative, humorous, witty, youthful, etc. There should also be a number of post examples, at least 10, which should represent a diverse range of posts and should give the designer an idea about the posts. It should be extensive, comprehensive, and detailed. It should also be concise at the same time. It should not contain repetitive information or unnecessary aspects. Thus, you have to properly structure it, describing the posting, marketing, .. styles.**
 
 **Guidelines for Structuring:**
 
@@ -1132,26 +1131,27 @@ You are tasked with structuring the textual description of a collection of highl
    - Ensure that the description retain comprehensive details about each aspect of the posts, including nuanced elements of the captions and intricate details of image compositions.
    - Avoid overly general statements; instead, strive to include specific examples and descriptive language that reflect the depth of the original content.
 
-4. **Summarize Recurring Patterns and Elements:**
+4. **Analyse Recurring Patterns and Elements:**
    - Identify patterns in post types, such as product promotions, behind-the-scenes content, or customer testimonials.
-   - Group similar content types and summarize them cohesively, without losing important distinctions between posts.
+   - Group similar content types and analyse them cohesively, without losing important distinctions between posts.
 
 5. **Minimize Redundancy:**
    - Eliminate unnecessary repetition of identical or very similar information across posts, focusing instead on the unique aspects of each one.
-   - When appropriate, generalize across multiple posts where they follow a consistent format or theme.
+   - Whenever appropriate, generalize across multiple posts where they follow a consistent format or theme.
+   - Whenever appropriate, give extremely detailed analysis of individual posts and its elements.
 
 6. **Emphasize Recent Posts:**
-   - Give additional importance to the most recent 5-10 posts, ensuring that their unique elements and any new trends in the brand’s style are adequately represented in the summary.
+   - Give additional importance to the most recent 5-10 posts, ensuring that their unique elements and any new trends in the brand’s style are adequately represented in the response.
    - Analyze these recent posts to capture any shifts or evolutions in the brand’s messaging or visual presentation.
 
 7. **Include Recent Posts as Examples:**
-   - **Compulsorily include at least some of the recent posts (specifically from the last 5-10 posts) in their entirety as examples within the summary to showcase the latest style and content approaches.**
+   - **Compulsorily include at least some of the recent posts (specifically from the last 5-10 posts) in their entirety as examples within the response to showcase the latest style and content approaches.**
    - **Ensure that the posts you select as examples from the recent 5-10 posts are diverse and not similar to each other.** *(Do not select similar posts)*
 
 8. **Retain Raw Examples for Multi-Shot Prompting:**
    - **Select and retain approximately 10 posts in their original, detailed form to serve as raw examples for multi-shot prompting.**
    - **Ensure these examples are diverse and representative of the brand’s range, covering different post types and styles.**
-   - **Keep the raw examples identical to the input data without any modification or summarization.**
+   - **Keep the raw examples identical to the input data without any modification.**
 
 9. **Organize the Description Effectively:**
    - Structure the description in a clear and logical manner, possibly grouping similar posts together and highlighting key themes and styles.
@@ -1159,13 +1159,13 @@ You are tasked with structuring the textual description of a collection of highl
 
 **Output Requirements:**
 
-* **Comprehensive Description:** A highly detailed yet condensed version of the 20 posts, provided to you as input, that captures all essential aspects of the brand’s style, voice, and recurring themes without excessive compression. The description should include thorough descriptions that reflect the depth and nuance of the original posts. **Keep this version, highly detailed even though it is a condensed version of the original.**
+* **Comprehensive Description:** A highly detailed, structured version of the 20 posts, provided to you as input, that captures all essential aspects of the brand’s style, voice, and recurring themes without excessive compression. The description should include thorough descriptions that reflect the depth and nuance of the original posts.
 * **Included Recent Examples:** Incorporate at least some of the most recent posts (preferably from the first 5-10) as full examples to illustrate current style and content.
 * **Raw Multi-Shot Examples:** Provide atleast 10 posts in their original detailed form to be used as raw examples for multi-shot prompting. Try to make the selection of these posts diverse.
-* **Final Conclusion:** Provide a comprehensive conclusion summarizing the brand's marketing or branding style, its posts, and your overall response to the summarization task.
+* **Final Conclusion:** Provide a comprehensive conclusion summarizing the brand's marketing or branding style, its posts, and your overall response to the structuring task.
 * **Note:** Do not change the content of the Included Recent Examples or the Raw Multi-Shot Examples. Also do not write "(Details as provided above)" in their content, you have to copy-paste that content again.
 
-Focus on clarity and conciseness while maintaining the brand’s distinct identity throughout the summary. Ensure that the final output serves as a robust guide for generating future posts that align seamlessly with the established brand style. **Additionally, provide a conclusion that encapsulates the overall findings and insights derived from the summarized posts.**'''},
+Focus on clarity and conciseness while maintaining the brand’s distinct identity throughout the response. Ensure that the final output serves as a robust guide for generating future posts that align seamlessly with the established brand style. **Additionally, provide a conclusion that encapsulates the overall findings and insights derived from the posts.**'''},
                   {
               "role": "user",
               "content": f"Here is the social media posts data:\n\n{text}",
@@ -1173,7 +1173,7 @@ Focus on clarity and conciseness while maintaining the brand’s distinct identi
 
   # response_content = ""
   try:
-        completion = client_openai_summ.chat.completions.create(
+        completion = await client_openai_summ.chat.completions.create(
         model="openai/o1-mini",
         messages= chat_history,
         temperature=0.1,
@@ -1191,47 +1191,60 @@ async def brand_post_info_scrape(insta_username):
   costs += cost
   insta_images.sort(key=lambda x: x[2], reverse = True)
 
-  imgs = []
-  for i in insta_images:
-    for j in i[1]:
-      imgs.append(scrape_img(j))
+  # imgs = []
+  # for i in insta_images:
+  #   for j in i[1]:
+  #     imgs.append(j)
 
-  img_scrape = await asyncio.gather(*imgs)
   image_dict = {}
   c = 0
   for i in range(len(insta_images)):
     image_dict[insta_images[i][0]] = [[],insta_images[i][2]]
-    for j in range(len(insta_images[i][1])):
-      try:
-        img = BytesIO((img_scrape[c]).content)
-        image_dict[insta_images[i][0]][0].append(img)
-      except:
-        image_dict[insta_images[i][0]][0].append(-1)
+    for j in insta_images[i][1]:
+      image_dict[insta_images[i][0]][0].append(j)
       c += 1
 
-  # Modify this for saving brand voice images in directory
-  dir = os.getcwd()
-  if not os.path.exists(f'{dir}/images'):
-    os.makedirs(f'{dir}/images')
+  # imgs = []
+  # for i in insta_images:
+  #   for j in i[1]:
+  #     imgs.append(scrape_img(j))
 
-  l = []
-  idx = 0
+  # img_scrape = await asyncio.gather(*imgs)
+  # image_dict = {}
+  # c = 0
+  # for i in range(len(insta_images)):
+  #   image_dict[insta_images[i][0]] = [[],insta_images[i][2]]
+  #   for j in range(len(insta_images[i][1])):
+  #     try:
+  #       img = BytesIO((img_scrape[c]).content)
+  #       image_dict[insta_images[i][0]][0].append(img)
+  #     except:
+  #       image_dict[insta_images[i][0]][0].append(-1)
+  #     c += 1
 
-  for i in image_dict:
-    idx += 1
-    for id,j in enumerate(image_dict[i][0]):
-      try:
-        img = Image.open(j)
-        filename = f"{dir}/images/{image_dict[i][1]}_{id+1}.jpg"
-        img.save(filename)
-        l.append([idx, id+1,f"{image_dict[i][1]}_{id+1}.jpg",i,image_dict[i][1]])
-      except Exception as e:
-        # print(f"{image_dict[i][1]}_{id+1}.jpg")
-        # print(image_dict[i][1])
-        print(f"Error in Saving part: {e}")
+  # # Modify this for saving brand voice images in directory
+  # dir = os.getcwd()
+  # if not os.path.exists(f'{dir}/images'):
+  #   os.makedirs(f'{dir}/images')
 
-  df = pd.DataFrame(l, columns=['post_number','image_number_in_post','image_file_dir','caption', 'timestamp'])
-  df.to_csv(f'{dir}/images/insta_image_info.csv', index=False)
+  # l = []
+  # idx = 0
+
+  # for i in image_dict:
+  #   idx += 1
+  #   for id,j in enumerate(image_dict[i][0]):
+  #     try:
+  #       img = Image.open(j)
+  #       filename = f"{dir}/images/{image_dict[i][1]}_{id+1}.jpg"
+  #       img.save(filename)
+  #       l.append([idx, id+1,f"{image_dict[i][1]}_{id+1}.jpg",i,image_dict[i][1]])
+  #     except Exception as e:
+  #       # print(f"{image_dict[i][1]}_{id+1}.jpg")
+  #       # print(image_dict[i][1])
+  #       print(f"Error in Saving part: {e}")
+
+  # df = pd.DataFrame(l, columns=['post_number','image_number_in_post','image_file_dir','caption', 'timestamp'])
+  # df.to_csv(f'{dir}/images/insta_image_info.csv', index=False)
 
   descs = []
   for i in list(image_dict.keys()):
@@ -1239,24 +1252,17 @@ async def brand_post_info_scrape(insta_username):
     content = [{"type": "text", "text": f"The caption for the image is: {i}"}]
     # print(i)
 
-    check = 0
-
     for j in image_dict[i][0]:
-      try:
-        # print(j)
-        base64_image = base64.b64encode(j.getvalue()).decode('utf-8')
-        content.append({"type": "image_url",
-                            "image_url": {
-                            "url": f"data:image/jpeg;base64,{base64_image}",
-                            "detail": "high"}})
-        check = 1
+      # print(j)
+      # base64_image = base64.b64encode(j.getvalue()).decode('utf-8')
+      content.append({"type": "image_url",
+                          "image_url": {
+                          "url": j,
+                          "detail": "high"}})
 
-      except:
-        pass
-
-    if check == 0:
-      # descs.append(-1)
-      continue
+    # if check == 0:
+    #   # descs.append(-1)
+    #   continue
 
     descs.append(image_desc(content, i))
 
@@ -1269,7 +1275,25 @@ async def brand_post_info_scrape(insta_username):
     # print(f'#### Caption: {i[2]}\n\n#### Output:\n\n{gen}\n\n\n\n')
     out += f'#### Caption: {i[2]}\n\n#### Output:\n\n{gen}\n\n\n\n'
     costs += i[1]
-  return out, costs
+
+  out2, cost = await image_out_summ(out)
+  costs += cost
+  return out2, costs
+
+async def generate_brand_voice(company, industries, manual_urls, attachments, manual_input_text, design_text, location, content_types, brand_personalities, target_audience, brand_tone, brand_type, insta_handle):
+  return "Summary post", "Historical Post Analysis", 0.016
+  general_info = brand_info_scrape(company, industries, manual_urls, attachments, manual_input_text, design_text, location, content_types, brand_personalities, target_audience, brand_tone, brand_type)
+  hist_post_analysis = brand_post_info_scrape(insta_handle)
+  brand_voice_async = [general_info, hist_post_analysis]
+  brand_voice = await asyncio.gather(*brand_voice_async)
+
+  costs = 0
+  general_info, cost = brand_voice[0]
+  costs += cost
+  post_data, cost = brand_voice[1]
+  costs += cost
+
+  return general_info, post_data, cost
 
 # # Function to verify next-auth JWT tokens
 # def verify_nextauth_jwt(token: str) -> Optional[str]:
@@ -1288,30 +1312,119 @@ async def brand_post_info_scrape(insta_username):
 @brand_voice_bp.route('/create', methods=['POST'])
 @jwt_required()
 def create_brand():
-    data = request.json
     try:
         user_id = get_jwt_identity()
 
-        # Required fields with the updated socialMedia structure
-        required_fields = [
-            'company', 'brandVoiceName', 'industries', 'location', 'contentTypes',
-            'brandPersonalities', 'targetAudience', 'brandTone', 'brandType',
-            'socialMedia', 'otherUrls', 'manualInputText', 'designText'
-        ]
-        missing_fields = [field for field in required_fields if field not in data or not data[field]]
+        # Fetch the user's current credits
+        user_credits = get_user_credits(user_id)
+        if user_credits is None:
+            return jsonify({'error': 'User not found'}), 404
+
+        # Check if the user has enough credits
+        if user_credits < 0:
+            return jsonify({'error': 'Insufficient credits to generate brand voice.'}), 402
+
+        # Ensure the request is multipart/form-data
+        if not request.content_type.startswith('multipart/form-data'):
+            return jsonify({'error': 'Content-Type must be multipart/form-data'}), 400
+
+        # Extract form fields
+        company = request.form.get('company', '').strip()
+        location = request.form.get('location', '').strip()
+        brand_voice_name = request.form.get('brandVoiceName', '').strip()
+        brand_tone = request.form.get('brandTone', '').strip()
+        brand_type = request.form.get('brandType', '').strip()
+        industries = request.form.get('industries')
+
+        # Validate required fields
+        required_fields = ['company', 'location', 'brandVoiceName', 'brandTone', 'brandType']
+        missing_fields = [field for field in required_fields if not request.form.get(field)]
         if missing_fields:
             return jsonify({'error': f'Missing required fields: {", ".join(missing_fields)}'}), 400
 
-        # Validate the socialMedia object structure
-        social_media_data = data.get("socialMedia", {})
-        if not isinstance(social_media_data, dict):
-            return jsonify({'error': 'Invalid socialMedia data format.'}), 400
-        # Ensure instagram and twitter are usernames (not URLs) and linkedin is a URL
+        # Parse and validate brandType
+        try:
+            brand_type = int(brand_type)
+            if brand_type not in [1, 2, 3, 4]:
+                raise ValueError
+        except ValueError:
+            return jsonify({'error': 'Invalid brandType. Must be one of [1, 2, 3, 4]'}), 400
+
+        # Parse and validate industries
+        try:
+            industries = json.loads(industries)
+            if not isinstance(industries, list):
+                raise ValueError
+        except:
+            return jsonify({'error': 'Invalid format for industries.'}), 400
+
+        # Extract and parse otherIndustries
+        other_industries = request.form.get('otherIndustries', '[]')
+        try:
+            other_industries = json.loads(other_industries)
+            if not isinstance(other_industries, list):
+                raise ValueError
+        except:
+            return jsonify({'error': 'Invalid format for otherIndustries.'}), 400
+
+        # Extract and parse contentTypes
+        content_types = request.form.get('contentTypes', '[]')
+        try:
+            content_types = json.loads(content_types)
+            if not isinstance(content_types, list):
+                raise ValueError
+        except:
+            return jsonify({'error': 'Invalid format for contentTypes.'}), 400
+
+        # Extract and parse otherContentTypes
+        other_content_types = request.form.get('otherContentTypes', '[]')
+        try:
+            other_content_types = json.loads(other_content_types)
+            if not isinstance(other_content_types, list):
+                raise ValueError
+        except:
+            return jsonify({'error': 'Invalid format for otherContentTypes.'}), 400
+
+        # Extract and parse targetAudience
+        target_audience = request.form.get('targetAudience', '[]')
+        try:
+            target_audience = json.loads(target_audience)
+            if not isinstance(target_audience, list):
+                raise ValueError
+        except:
+            return jsonify({'error': 'Invalid format for targetAudience.'}), 400
+
+        # Extract and parse otherTargetAudiences
+        other_target_audiences = request.form.get('otherTargetAudiences', '[]')
+        try:
+            other_target_audiences = json.loads(other_target_audiences)
+            if not isinstance(other_target_audiences, list):
+                raise ValueError
+        except:
+            return jsonify({'error': 'Invalid format for otherTargetAudiences.'}), 400
+
+        # Extract and parse brandPersonalities
+        brand_personalities = request.form.get('brandPersonalities', '[]')
+        try:
+            brand_personalities = json.loads(brand_personalities)
+            if not isinstance(brand_personalities, list):
+                raise ValueError
+        except:
+            return jsonify({'error': 'Invalid format for brandPersonalities.'}), 400
+
+        # Extract and parse socialMedia
+        social_media_json = request.form.get('socialMedia', '{}')
+        try:
+            social_media_data = json.loads(social_media_json)
+            if not isinstance(social_media_data, dict):
+                raise ValueError
+        except:
+            return jsonify({'error': 'Invalid format for socialMedia.'}), 400
+
         instagram = social_media_data.get("instagram", "").strip('@')
         twitter = social_media_data.get("twitter", "").strip('@')
         linkedin = social_media_data.get("linkedin", "").strip()
 
-        # Basic validation for LinkedIn URL
         if linkedin and not linkedin.startswith("https://www.linkedin.com/"):
             return jsonify({'error': 'LinkedIn URL must start with "https://www.linkedin.com/"'}), 400
 
@@ -1321,102 +1434,130 @@ def create_brand():
             "linkedin": linkedin
         }
 
-        # Ensure list format for array fields
-        industries = data.get('industries', [])
-        if not isinstance(industries, list):
-            industries = [industries]
+        # Extract and parse otherUrls
+        other_urls_json = request.form.get('otherUrls', '[]')
+        try:
+            other_urls = json.loads(other_urls_json)
+            if not isinstance(other_urls, list):
+                raise ValueError
+        except:
+            return jsonify({'error': 'Invalid format for otherUrls.'}), 400
 
-        content_types = data.get('contentTypes', [])
-        if not isinstance(content_types, list):
-            content_types = [content_types]
+        # Extract manualInputText and designText
+        manual_input_text = request.form.get('manualInputText', '').strip()
+        design_text = request.form.get('designText', '').strip()
 
-        brand_personalities = data.get('brandPersonalities', [])
-        if not isinstance(brand_personalities, list):
-            brand_personalities = [brand_personalities]
-
-        target_audience = data.get('targetAudience', [])
-        if not isinstance(target_audience, list):
-            target_audience = [target_audience]
-
-        other_urls = data.get('otherUrls', [])
-        if not isinstance(other_urls, list):
-            other_urls = [other_urls]
+        # Extract files
+        uploaded_files = request.files.getlist('files')
+        attachments = []
+        for file in uploaded_files:
+            if file.filename == '':
+                continue
+            try:
+                file_content = file.read().decode('utf-8', errors='ignore')
+                attachments.append(file_content)
+                print(file_content)
+            except Exception as e:
+                logger.error(f"Error reading file {file.filename}: {e}")
+                return jsonify({'error': f'Failed to read file {file.filename}.'}), 400
 
         profile_data = {
-            'user_id': user_id,
-            'company': data['company'],
-            'brandVoiceName': data['brandVoiceName'],
+            'user_id': ObjectId(user_id),
+            'company': company,
+            'brandVoiceName': brand_voice_name,
             'industries': industries,
-            'location': data['location'],
+            'otherIndustries': other_industries,
+            'location': location,
             'contentTypes': content_types,
-            'brandPersonalities': brand_personalities,
+            'otherContentTypes': other_content_types,
             'targetAudience': target_audience,
-            'brandTone': data['brandTone'],
-            'brandType': data['brandType'],
+            'otherTargetAudiences': other_target_audiences,
+            'brandPersonalities': brand_personalities,
+            'brandTone': brand_tone,
+            'brandType': brand_type,
             'socialMedia': social_media,
             'otherUrls': other_urls,
-            'manualInputText': data['manualInputText'],
-            'designText': data['designText'],
+            'manualInputText': manual_input_text,
+            'designText': design_text,
             'created_at': datetime.utcnow(),
             'updated_at': datetime.utcnow()
         }
 
-        # Save the brand profile to MongoDB
-        profile_id = create_brand_profile(user_id, profile_data)
+        # Run async tasks to get the brand voice data and total cost
+        # async def run_async_tasks():
+        #     total_cost = 0
+        #     summary, cost = await brand_info_scrape(
+        #         company=profile_data['company'],
+        #         industries=industries,
+        #         manual_urls=[url['url'] for url in other_urls],
+        #         attachments=attachments,
+        #         manual_input_text=profile_data['manualInputText'],
+        #         design_text=profile_data['designText'],
+        #         location=profile_data['location'],
+        #         content_types=content_types,
+        #         brand_personalities=brand_personalities,
+        #         target_audience=target_audience,
+        #         brand_tone=profile_data['brandTone'],
+        #         brand_type=profile_data['brandType']
+        #     )
+        #     total_cost += cost
+        #     descriptions, cost = await brand_post_info_scrape(social_media['instagram'])
+        #     total_cost += cost
+        #     sum_posts_data, cost = await image_out_summ(descriptions)
+        #     total_cost += cost
+        #     return summary, total_cost, sum_posts_data
+        
+        print(profile_data['company'])
+        print(industries)
+        print([url['url'] for url in other_urls])
+        print(attachments)
+        print(profile_data['manualInputText'])
+        print(profile_data['designText'])
+        print(content_types)
+        print(brand_personalities)
+        print(target_audience)
+        print(profile_data['brandTone'])
+        print(profile_data['brandType'])
+        print([social_media['instagram']])
+        print(profile_data['location'])
 
-        # Extract necessary fields for brand_info_scrape
-        company = data['company']
-        brand_voice_name = data['brandVoiceName']
-        location = data['location']
-        brand_tone = data['brandTone']
-        brand_type = int(data['brandType'])  # Assuming brandType is sent as string in frontend
-
-        manual_urls = other_urls
-        attachments = []  # Assuming attachments are handled elsewhere
-        manual_input_text = data.get('manualInputText', '')
-        design_text = data.get('designText', '')
-
-        # Prepare usernames as a list
-        usernames = []
-        if instagram:
-            usernames.append(instagram)
-        if twitter:
-            usernames.append(twitter)
-        # Add more usernames if needed
-
-        async def run_async_tasks():
-            # Run brand_info_scrape
-            total_cost = 0
-            summary, cost = await brand_info_scrape(
-                company=company,
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            summary, insta_descriptions, total_cost = loop.run_until_complete(
+              generate_brand_voice(
+                company=profile_data['company'],
                 industries=industries,
-                manual_urls=manual_urls,
+                manual_urls=[url['url'] for url in other_urls],
                 attachments=attachments,
-                manual_input_text=manual_input_text,
-                design_text=design_text,
-                location=location,
+                manual_input_text=profile_data['manualInputText'],
+                design_text=profile_data['designText'],
+                location=profile_data['location'],
                 content_types=content_types,
                 brand_personalities=brand_personalities,
                 target_audience=target_audience,
-                brand_tone=brand_tone,
-                brand_type=brand_type
+                brand_tone=profile_data['brandTone'],
+                brand_type=profile_data['brandType'],
+                insta_handle=[social_media['instagram']],
+              )
             )
-            total_cost += cost
-            descriptions, cost = await brand_post_info_scrape([instagram])
-            total_cost += cost
-            sum_posts_data, cost = image_out_summ(descriptions)
-            total_cost += cost
-            return summary, total_cost, sum_posts_data
+        except Exception as e:
+            logger.exception("Async tasks failed")
+            return jsonify({'error': 'Failed to process brand voice.'}), 500
+        finally:
+            loop.close()
 
-        # Create and run the event loop
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        summary, total_cost, insta_descriptions = loop.run_until_complete(run_async_tasks())
-        loop.close()
-        # print(insta_descriptions)
+        # Deduct credits and log the transaction
+        deduction_description = "Brand voice creation"
+        if not deduct_and_log_user_credits(user_id, total_cost, deduction_description, transaction_type="brand_voice_creation"):
+            return jsonify({'error': 'Failed to deduct credits'}), 500
+
+        # Save the brand profile to MongoDB
+        profile_id = create_brand_profile(user_id, profile_data)
+
         # Prepare the brand voice data
         voice_data = {
-            'voiceName': brand_voice_name,
+            'voiceName': profile_data['brandVoiceName'],
             'summary': summary,
             'instagramDescriptions': insta_descriptions,
             'created_at': datetime.utcnow(),
@@ -1426,16 +1567,19 @@ def create_brand():
         # Save the brand voice to MongoDB
         create_brand_voice(profile_id, voice_data)
 
+        # Fetch updated credits
+        updated_credits = get_user_credits(user_id)
+
         return jsonify({
             'msg': 'Brand profile created successfully.',
             'summary': voice_data['summary'],
             'instagramDescriptions': insta_descriptions,
+            'remainingCredits': updated_credits
         }), 201
 
     except Exception as e:
-        logging.exception("Error in /brand/create POST route")
-        return jsonify({'error': str(e)}), 500
-
+        logger.exception("Error in /brand/create POST route")
+        return jsonify({'error': 'An internal server error occurred.'}), 500
 
 # Apply nest_asyncio to allow nested event loops (necessary for certain environments)
 nest_asyncio.apply()
@@ -1455,9 +1599,10 @@ def get_profile():
         brand_voice = get_brand_voice(brand_profile['_id'])
         if not brand_voice:
             return jsonify({'error': 'Brand voice not found for this profile.'}), 404
+
         # Retrieve Instagram descriptions and total cost from brand_voice
         insta_descriptions = brand_voice.get("instagramDescriptions", "")
-        
+
         # Ensure all array fields are lists
         target_audience = brand_profile.get("targetAudience", [])
         if not isinstance(target_audience, list):
@@ -1511,4 +1656,5 @@ def get_profile():
         return jsonify(response_data), 200
 
     except Exception as e:
+        logger.exception("Error in /brand/profile GET route")
         return jsonify({'error': 'An internal server error occurred.'}), 500

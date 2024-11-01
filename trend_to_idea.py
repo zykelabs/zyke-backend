@@ -1,12 +1,19 @@
 from flask import Blueprint, request, jsonify
 from openai import OpenAI
+import logging
 from config import Config  # Ensure you have a config.py file with the Config class
 from flask_jwt_extended import get_jwt_identity, jwt_required
 from pymongo import MongoClient
 from pymongo.collection import Collection
 from datetime import datetime, timedelta
+from bson import ObjectId
 import pytz  # For timezone-aware datetime objects
+from models import get_user_credits,get_brand_profile,get_brand_voice,deduct_and_log_user_credits
+trend_to_idea_bp = Blueprint('trend_to_idea', __name__)
 
+# Configure logger
+logging.basicConfig(level=logging.ERROR)
+logger = logging.getLogger(__name__)
 trend_to_idea_bp = Blueprint('trend_to_idea', __name__)
 
 client_openai_gen = OpenAI(
@@ -614,7 +621,6 @@ def get_idea(text, structured_brand_voice, brand_voice_posts_data, company, use)
         return get_idea_from_topic(text, structured_brand_voice, brand_voice_posts_data, company, use)
     elif use == 'trend':
         return get_idea_from_trends(text, structured_brand_voice, brand_voice_posts_data, company)
-
 @trend_to_idea_bp.route('/generate_ideas', methods=['POST'])
 @jwt_required()
 def generate_ideas_api():
@@ -623,52 +629,66 @@ def generate_ideas_api():
     text = data.get('text', [])
     use = data.get('use', "")
     
+    # Validate required fields
+    if not text or not use:
+        return jsonify({"error": "Required inputs are missing."}), 400
+
     # Define the cache validity duration
     CACHE_DURATION = timedelta(hours=6)
-    
+
     try:
+        # Fetch the user's current credits
+        user_credits = get_user_credits(user_id)
+        
+        # print(user_credits)
+        
+        if user_credits is None:
+            return jsonify({"error": "User not found"}), 404
+        
+        # Check if the user has enough credits
+        if user_credits <= 0:
+            return jsonify({"error": "Insufficient credits to generate ideas."}), 402
+
         # Fetch the user's cached data if use is 'trend'
         if use == 'trend':
-            cached_data = user_trends_collection.find_one({'user_id': user_id})
+            cached_data = user_trends_collection.find_one({'user_id': ObjectId(user_id)})
 
             current_time = datetime.utcnow()
 
             if cached_data:
                 last_timestamp = cached_data.get('timestamp')
+                # print(current_time)
+                # print(last_timestamp)
                 if last_timestamp and (current_time - last_timestamp) < CACHE_DURATION:
                     # Cached data is still valid and matches the 'use' parameter
                     return jsonify({
                         "ideas": cached_data.get('ideas'),
                         "cached": True
                     }), 200
-                    
+
     except Exception as e:
-        print(f"Error in generate_ideas_api: {e}")
+        logger.error(f"Error fetching cache: {e}")
         return jsonify({"error": "Internal server error"}), 500
-    
+
     # Step 1: Fetch the user's brand profile based on user_id
     try:
-        brand_profile = brand_profiles_collection.find_one({'user_id': user_id})
+        brand_profile = get_brand_profile(user_id)
         if not brand_profile:
             return jsonify({"error": "Brand profile not found for the user."}), 401
-        
-        # print(user_id)
 
         brand_profile_id = brand_profile.get('_id')
         if not brand_profile_id:
             return jsonify({"error": "Brand profile ID missing."}), 402
-        
-        # print(brand_profile_id)
 
         # Step 2: Fetch the brand voice using brand_profile_id
-        brand_voice = brand_voices_collection.find_one({'brand_profile_id': brand_profile_id})
+        brand_voice = get_brand_voice(brand_profile_id)
         if not brand_voice:
             return jsonify({"error": "Brand voice not found for the user."}), 403
 
         # Step 3: Extract required fields from brand_voice
         structured_brand_voice = brand_voice.get('summary', "")
         brand_voice_posts_data = brand_voice.get('instagramDescriptions', "")
-        
+
         if not brand_voice_posts_data or not structured_brand_voice:
             return jsonify({"error": "Brand voice fields (summary or instagramDescriptions) not found for the user."}), 404
 
@@ -678,42 +698,49 @@ def generate_ideas_api():
             return jsonify({"error": "Company information missing in brand profile."}), 405
 
     except Exception as e:
-        print(f"Database fetch error: {e}")
+        logger.error(f"Failed to fetch brand data: {e}")
         return jsonify({"error": "Failed to fetch brand data."}), 501
 
-    # Validate required fields
-    if not text or not use:
-        return jsonify({"error": "Required inputs are missing."}), 400
-    
-    # print(structured_brand_voice[:100],"\n\n\n\n\n",brand_voice_posts_data[:100],"\n\n\n")
-
     try:
-        # If no valid cached data, generate new ideas
+        # Generate ideas and calculate costs
         ideas, costs = get_idea(text, structured_brand_voice, brand_voice_posts_data, company, use)
-
         if ideas == -1:
             return jsonify({"error": "Failed to generate ideas"}), 502
 
+        # Check if the user has enough credits and deduct them if so
+        deduction_description = f"Generate ideas using use='{use}'"
+        success, error_msg = deduct_and_log_user_credits(user_id, costs, deduction_description, transaction_type="generate_ideas")
+    
+        if not success:
+            # Return the specific error message captured
+            return jsonify({"error": error_msg}), 500
+        
+        # If use is 'trend', cache the generated ideas
         if use == 'trend':
             # Prepare the document to upsert
             document = {
-                "user_id": user_id,
+                "user_id": ObjectId(user_id),
                 "timestamp": datetime.utcnow(),
                 "ideas": ideas
             }
 
             # Upsert the document (insert if not exists, else update)
             user_trends_collection.update_one(
-                {"user_id": user_id},
+                {"user_id": ObjectId(user_id)},
                 {"$set": document},
                 upsert=True
             )
 
+        # Fetch updated credits
+        updated_credits = get_user_credits(user_id)
+
+        # Return the generated ideas and remaining credits
         return jsonify({
             "ideas": ideas,
-            "cached": False
+            "cached": False,
+            "remainingCredits": updated_credits  # Updated credits after deduction
         }), 200
 
     except Exception as e:
-        print(f"Error in generate_ideas_api: {e}")
-        return jsonify({"error": "Internal server error"}), 503
+        logger.error(f"Error in /generate_ideas: {e}")
+        return jsonify({"error": f"Internal server error, {e}"}), 503

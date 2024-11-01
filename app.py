@@ -1,3 +1,4 @@
+# app.py
 from flask import Flask, jsonify
 from config import Config
 from trends import trends_bp
@@ -7,41 +8,45 @@ from flask_jwt_extended import JWTManager
 from emailservice import init_mail
 from flask_cors import CORS
 from brandvoiceinfo import brand_voice_bp
-from auth import oauth_init_app,auth_bp
+from auth import oauth_init_app, auth_bp
 from trend_to_idea import trend_to_idea_bp
 from repurpose import repurpose_bp
 from idea_to_post import idea_to_post_bp
 from fetch_last_post import fetch_last_post_bp
 
-app = Flask(__name__)
-app.config.from_object(Config)
-
-# Configure CORS to allow frontend domain
-CORS(app)
-
-# Initialize Flask-Mail
-init_mail(app)
-
-# Initialize JWT
-jwt = JWTManager(app)
-
-# Initialize OAuth
-oauth_init_app(app)
-
-# Register blueprints
-app.register_blueprint(auth_bp, url_prefix='/auth')
-app.register_blueprint(trends_bp, url_prefix='/trends') 
-app.register_blueprint(transactions_bp, url_prefix='/transactions')
-app.register_blueprint(webhooks_bp, url_prefix='/webhooks')
-app.register_blueprint(brand_voice_bp, url_prefix='/brand_voice_info')
-app.register_blueprint(trend_to_idea_bp, url_prefix='/trend_to_idea')
-app.register_blueprint(repurpose_bp, url_prefix='/repurpose')
-app.register_blueprint(idea_to_post_bp, url_prefix='/idea_to_post')
-app.register_blueprint(fetch_last_post_bp, url_prefix='/fetch_last_post')
-
-@app.route('/')
-def home():
-    return jsonify({'msg': 'Welcome to the Flask Authentication and Brand API!'})
+def create_app():
+    app = Flask(__name__)
+    app.config.from_object(Config)
+    
+    # Configure CORS to allow frontend domain
+    CORS(app)
+    
+    # Initialize Flask-Mail
+    init_mail(app)
+    
+    # Initialize JWT
+    jwt = JWTManager(app)
+    
+    # Initialize OAuth
+    oauth_init_app(app)
+    
+    # Register blueprints
+    app.register_blueprint(auth_bp, url_prefix='/auth')
+    app.register_blueprint(trends_bp, url_prefix='/trends') 
+    app.register_blueprint(transactions_bp, url_prefix='/transactions')
+    app.register_blueprint(webhooks_bp, url_prefix='/webhooks')
+    app.register_blueprint(brand_voice_bp, url_prefix='/brand_voice_info')
+    app.register_blueprint(trend_to_idea_bp, url_prefix='/trend_to_idea')
+    app.register_blueprint(repurpose_bp, url_prefix='/repurpose')
+    app.register_blueprint(idea_to_post_bp, url_prefix='/idea_to_post')
+    app.register_blueprint(fetch_last_post_bp, url_prefix='/fetch_last_post')
+    
+    @app.route('/')
+    def home():
+        return jsonify({'msg': 'Welcome to the Flask Authentication and Brand API!'})
+    
+    return app
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app = create_app()
+    app.run(debug=False)

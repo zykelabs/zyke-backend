@@ -1,14 +1,25 @@
 from flask import Blueprint, jsonify, request
 from flask_cors import cross_origin
-from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
-from models import find_user_by_email, create_user, update_user_password, update_user_razorpay_customer_id
+from flask_jwt_extended import (
+    create_access_token,
+    jwt_required,
+    get_jwt_identity
+)
+from models import (
+    find_user_by_email,
+    create_user,
+    update_user_password,
+    update_user_razorpay_customer_id,
+    get_user_by_id,
+    update_transaction
+)
 from emailservice import (
     send_otp_email,
     send_password_reset_email,
     send_confirmation_email,
     send_password_reset_success_email
 )
-from otp import generate_otp, verify_otp, store_user_data
+from otp import generate_otp, verify_otp,store_user_data
 from utils import hash_password, verify_password
 from authlib.integrations.flask_client import OAuth
 from datetime import datetime
@@ -46,6 +57,10 @@ def oauth_init_app(app):
 razorpay_client = razorpay.Client(
     auth=(os.environ.get('RAZORPAY_KEY'), os.environ.get('RAZORPAY_SECRET'))
 )
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Register User with OTP Verification
 @auth_bp.route('/register', methods=['POST'])
@@ -165,7 +180,6 @@ def verify_otp_route():
     # If OTP verification failed
     return jsonify({"msg": msg}), 400
 
-
 # Login User
 @auth_bp.route('/login', methods=['POST'])
 def login():
@@ -180,11 +194,10 @@ def login():
     if not user or not user.get('password') or not verify_password(password, user['password']):
         return jsonify({"msg": "Invalid email or password"}), 401
 
-    if not user.get('otp_verified'):
-        return jsonify({"msg": "Email not verified. Please verify your email"}), 403
-
+    # Generate and return access token without otp_verified check
     access_token = create_access_token(identity=str(user['_id']))
     return jsonify({"access_token": access_token}), 200
+
 
 # Request Password Reset
 @auth_bp.route('/request-reset', methods=['POST'])
@@ -203,6 +216,7 @@ def request_reset():
     send_password_reset_email(email, reset_token)
 
     return jsonify({"msg": "Password reset email sent"}), 200
+
 
 # Reset Password and send confirmation email
 @auth_bp.route('/reset-password', methods=['POST'])
@@ -228,11 +242,12 @@ def reset_password():
 
     return jsonify({"msg": "Password reset successful. Confirmation email sent."}), 200
 
+
 # OAuth Login
 @auth_bp.route('/oauth-login', methods=['POST'])
 def oauth_login():
     data = request.get_json()
-    logging.info("Received OAuth Data: %s", data)
+    logger.info("Received OAuth Data: %s", data)
 
     email = data.get('email')
     first_name = data.get('first_name')
@@ -254,19 +269,19 @@ def oauth_login():
             "last_name": last_name,
             "auth_provider": auth_provider,
             "provider_id": provider_id,
+            "credits": 3.0,
             "created_at": datetime.utcnow(),
             "updated_at": datetime.utcnow(),
-            "otp_verified": True,  # OAuth users are considered verified
             "razorpay_customer_id": None  # To be created
         }
         user_id = create_user(user_data)
 
-        # Attempt to create Razorpay customer
         try:
+            # Attempt to create Razorpay customer
             customer = razorpay_client.customer.create({
                 'name': f"{first_name} {last_name}",
                 'email': email,
-                'contact': user_data.get('phone', '')  # Assuming phone is collected
+                'contact': user_data.get('contact', '')  # Assuming contact is collected
             })
             razorpay_customer_id = customer.get('id')
 
@@ -284,24 +299,51 @@ def oauth_login():
                         if existing_customer:
                             razorpay_customer_id = existing_customer.get('id')
                             update_user_razorpay_customer_id(user_id, razorpay_customer_id)
-                            logging.info("Customer exists. Razorpay Customer ID: %s", razorpay_customer_id)
+                            logger.info("Customer exists. Razorpay Customer ID: %s", razorpay_customer_id)
                         else:
                             raise Exception("Customer exists but could not fetch Razorpay Customer ID.")
                     else:
                         raise Exception("Customer exists but could not fetch Razorpay customer data.")
                 except Exception as fetch_error:
-                    logging.error("Error fetching Razorpay customer: %s", str(fetch_error))
+                    logger.error("Error fetching Razorpay customer: %s", str(fetch_error))
                     return jsonify({"msg": "OAuth login successful, but failed to fetch existing payment profile."}), 200
             else:
-                logging.error("BadRequestError from Razorpay: %s", error_message)
+                logger.error("BadRequestError from Razorpay: %s", error_message)
                 return jsonify({"msg": "OAuth login successful, but failed to create payment profile. Bad Request Error."}), 200
 
         except razorpay.errors.ServerError as e:
-            logging.error("ServerError from Razorpay: %s", str(e))
+            logger.error("ServerError from Razorpay: %s", str(e))
             return jsonify({"msg": "OAuth login successful, but failed to create payment profile due to Razorpay server issue."}), 200
 
         except Exception as e:
-            logging.error("General error creating Razorpay customer: %s", str(e))
+            logger.error("General error creating Razorpay customer: %s", str(e))
             return jsonify({"msg": "OAuth login successful, but failed to create payment profile due to an unexpected error."}), 200
 
     return jsonify({"msg": "OAuth login successful"}), 200
+
+
+@auth_bp.route('/user', methods=['GET'])
+@jwt_required()
+def get_current_user():
+    """
+    Retrieve the authenticated user's information.
+
+    Returns:
+        JSON response containing user details or an error message.
+    """
+    user_id = get_jwt_identity()
+    user = get_user_by_id(user_id)
+    if not user:
+        return jsonify({"msg": "User not found"}), 404
+
+    # Exclude sensitive data like password and Razorpay customer ID
+    user_data = {
+        "email": user.get("email"),
+        "first_name": user.get("first_name"),
+        "last_name": user.get("last_name"),
+        "contact": user.get("contact", ""),  # Assuming contact is stored
+        "credits": user.get("credits", 0.0)
+        # Add other non-sensitive fields as needed
+    }
+
+    return jsonify(user_data), 200
