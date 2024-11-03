@@ -1,10 +1,17 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, make_response
 from flask_cors import cross_origin
+# Remove imports related to cookies
 from flask_jwt_extended import (
     create_access_token,
+    create_refresh_token,
     jwt_required,
-    get_jwt_identity
+    get_jwt_identity,
+    unset_jwt_cookies,
+    set_access_cookies,
+    set_refresh_cookies,
+    decode_token
 )
+
 from models import (
     find_user_by_email,
     create_user,
@@ -19,10 +26,10 @@ from emailservice import (
     send_confirmation_email,
     send_password_reset_success_email
 )
-from otp import generate_otp, verify_otp,store_user_data
+from otp import generate_otp, verify_otp, store_user_data
 from utils import hash_password, verify_password
 from authlib.integrations.flask_client import OAuth
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import razorpay
 from pymongo import MongoClient
@@ -61,6 +68,10 @@ razorpay_client = razorpay.Client(
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Token Configuration
+ACCESS_TOKEN_EXPIRES = timedelta(minutes=15)
+REFRESH_TOKEN_EXPIRES = timedelta(days=7)
 
 # Register User with OTP Verification
 @auth_bp.route('/register', methods=['POST'])
@@ -175,7 +186,16 @@ def verify_otp_route():
         # Send confirmation email
         send_confirmation_email(email)
 
-        return jsonify({"msg": "Email verified successfully. Confirmation email sent."}), 200
+        # Generate tokens
+        access_token = create_access_token(identity=str(user_id), expires_delta=ACCESS_TOKEN_EXPIRES)
+        refresh_token = create_refresh_token(identity=str(user_id), expires_delta=REFRESH_TOKEN_EXPIRES)
+
+        # Create response with tokens
+        response = jsonify({"msg": "Email verified successfully. Confirmation email sent."})
+        set_access_cookies(response, access_token)
+        set_refresh_cookies(response, refresh_token)
+
+        return response, 200
 
     # If OTP verification failed
     return jsonify({"msg": msg}), 400
@@ -191,12 +211,23 @@ def login():
         return jsonify({"msg": "Email and password are required"}), 400
 
     user = find_user_by_email(email)
-    if not user or not user.get('password') or not verify_password(password, user['password']):
-        return jsonify({"msg": "Invalid email or password"}), 401
+    if user and verify_password(password, user['password']):
+        access_token = create_access_token(identity=str(user['_id']), expires_delta=ACCESS_TOKEN_EXPIRES)
+        refresh_token = create_refresh_token(identity=str(user['_id']), expires_delta=REFRESH_TOKEN_EXPIRES)
+        
+        return jsonify({
+            "msg": "Login successful",
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "user": {
+                "id": str(user['_id']),
+                "email": user['email'],
+                "first_name": user['first_name'],
+                "last_name": user['last_name']
+            }
+        }), 200
 
-    # Generate and return access token without otp_verified check
-    access_token = create_access_token(identity=str(user['_id']))
-    return jsonify({"access_token": access_token}), 200
+    return jsonify({"msg": "Invalid email or password"}), 401
 
 
 # Request Password Reset
@@ -212,11 +243,10 @@ def request_reset():
     if not user:
         return jsonify({"msg": "Email not found"}), 404
 
-    reset_token = create_access_token(identity=email, expires_delta=False)
+    reset_token = create_access_token(identity=email, expires_delta=ACCESS_TOKEN_EXPIRES)
     send_password_reset_email(email, reset_token)
 
     return jsonify({"msg": "Password reset email sent"}), 200
-
 
 # Reset Password and send confirmation email
 @auth_bp.route('/reset-password', methods=['POST'])
@@ -242,86 +272,123 @@ def reset_password():
 
     return jsonify({"msg": "Password reset successful. Confirmation email sent."}), 200
 
-
-# OAuth Login
-@auth_bp.route('/oauth-login', methods=['POST'])
+# OAuth Routes
+@auth_bp.route('/oauth/login', methods=['GET'])
 def oauth_login():
-    data = request.get_json()
-    logger.info("Received OAuth Data: %s", data)
+    redirect_uri = request.base_url.replace('oauth/login', 'oauth/callback')
+    return oauth.google.authorize_redirect(redirect_uri)
 
-    email = data.get('email')
-    first_name = data.get('first_name')
-    last_name = data.get('last_name')
-    provider_id = data.get('provider_id')
-    auth_provider = data.get('auth_provider')
+@auth_bp.route('/oauth/callback', methods=['GET'])
+def oauth_callback():
+    token = oauth.google.authorize_access_token()
+    user_info = oauth.google.parse_id_token(token)
+    
+    if not user_info:
+        return jsonify({"msg": "Failed to retrieve user info from Google"}), 400
+
+    email = user_info.get('email')
+    first_name = user_info.get('given_name')
+    last_name = user_info.get('family_name')
+    provider_id = user_info.get('sub')  # Google's unique user ID
 
     if not email:
-        return jsonify({"msg": "Email is required"}), 400
+        return jsonify({"msg": "Email not available from Google"}), 400
 
     user = find_user_by_email(email)
+    if user:
+        user_id = str(user['_id'])
+        # Update Razorpay customer ID if missing
+        if not user.get('razorpay_customer_id'):
+            try:
+                # Fetch existing Razorpay customer by email
+                customers = razorpay_client.customer.all({'email': email})
+                if customers and 'items' in customers:
+                    existing_customer = next((cust for cust in customers['items'] if cust['email'] == email), None)
+                    if existing_customer:
+                        razorpay_customer_id = existing_customer.get('id')
+                        update_user_razorpay_customer_id(user_id, razorpay_customer_id)
+                        logging.info("Customer exists. Razorpay Customer ID: %s", razorpay_customer_id)
+                    else:
+                        # No matching Razorpay customer found; create one
+                        customer = razorpay_client.customer.create({
+                            'name': f"{first_name} {last_name}",
+                            'email': email
+                        })
+                        razorpay_customer_id = customer.get('id')
+                        update_user_razorpay_customer_id(user_id, razorpay_customer_id)
+            except Exception as e:
+                logging.error("Error handling Razorpay customer: %s", str(e))
+                # Proceed without Razorpay customer ID
 
-    if not user:
-        # Create a new user if they don't exist
+    else:
+        # New user creation if user does not exist
         user_data = {
             "email": email,
-            "password": None,
             "first_name": first_name,
             "last_name": last_name,
-            "auth_provider": auth_provider,
+            "auth_provider": "google",
             "provider_id": provider_id,
             "credits": 3.0,
             "created_at": datetime.utcnow(),
             "updated_at": datetime.utcnow(),
-            "razorpay_customer_id": None  # To be created
+            "razorpay_customer_id": None  # Initially set to None
         }
         user_id = create_user(user_data)
-
+        
         try:
-            # Attempt to create Razorpay customer
+            # Create a new Razorpay customer
             customer = razorpay_client.customer.create({
                 'name': f"{first_name} {last_name}",
-                'email': email,
-                'contact': user_data.get('contact', '')  # Assuming contact is collected
+                'email': email
             })
             razorpay_customer_id = customer.get('id')
-
-            # Update user with Razorpay customer ID
             update_user_razorpay_customer_id(user_id, razorpay_customer_id)
 
-        except razorpay.errors.BadRequestError as e:
-            error_message = str(e)
-            if 'Customer already exists for the merchant' in error_message:
-                # Fetch existing Razorpay customer by email
-                try:
-                    customers = razorpay_client.customer.all({'email': email})
-                    if customers and 'items' in customers:
-                        existing_customer = next((cust for cust in customers['items'] if cust['email'] == email), None)
-                        if existing_customer:
-                            razorpay_customer_id = existing_customer.get('id')
-                            update_user_razorpay_customer_id(user_id, razorpay_customer_id)
-                            logger.info("Customer exists. Razorpay Customer ID: %s", razorpay_customer_id)
-                        else:
-                            raise Exception("Customer exists but could not fetch Razorpay Customer ID.")
-                    else:
-                        raise Exception("Customer exists but could not fetch Razorpay customer data.")
-                except Exception as fetch_error:
-                    logger.error("Error fetching Razorpay customer: %s", str(fetch_error))
-                    return jsonify({"msg": "OAuth login successful, but failed to fetch existing payment profile."}), 200
-            else:
-                logger.error("BadRequestError from Razorpay: %s", error_message)
-                return jsonify({"msg": "OAuth login successful, but failed to create payment profile. Bad Request Error."}), 200
-
-        except razorpay.errors.ServerError as e:
-            logger.error("ServerError from Razorpay: %s", str(e))
-            return jsonify({"msg": "OAuth login successful, but failed to create payment profile due to Razorpay server issue."}), 200
-
         except Exception as e:
-            logger.error("General error creating Razorpay customer: %s", str(e))
-            return jsonify({"msg": "OAuth login successful, but failed to create payment profile due to an unexpected error."}), 200
+            logging.error("Error creating Razorpay customer for new user: %s", str(e))
+            # Proceed without Razorpay customer ID
 
-    return jsonify({"msg": "OAuth login successful"}), 200
+    # Generate tokens
+    access_token = create_access_token(identity=str(user['_id'] if user else user_id), expires_delta=ACCESS_TOKEN_EXPIRES)
+    refresh_token = create_refresh_token(identity=str(user['_id'] if user else user_id), expires_delta=REFRESH_TOKEN_EXPIRES)
+
+    # Create response with tokens
+    response = make_response(jsonify({"msg": "OAuth login successful"}))
+    set_access_cookies(response, access_token)
+    set_refresh_cookies(response, refresh_token)
+
+    return response, 200
 
 
+# Refresh Token Endpoint
+# Refresh Token Endpoint
+@auth_bp.route('/refresh', methods=['POST'])
+def refresh():
+    data = request.get_json()
+    refresh_token = data.get('refresh_token')
+    
+    if not refresh_token:
+        return jsonify({"msg": "Refresh token is missing"}), 400
+
+    try:
+        # Verify the refresh token
+        identity = decode_token(refresh_token)['sub']
+        access_token = create_access_token(identity=identity, expires_delta=ACCESS_TOKEN_EXPIRES)
+        return jsonify({
+            "access_token": access_token
+        }), 200
+    except Exception as e:
+        return jsonify({"msg": "Invalid refresh token"}), 401
+
+
+# Logout User
+@auth_bp.route('/logout', methods=['POST'])
+def logout():
+    response = jsonify({"msg": "Logout successful"})
+    unset_jwt_cookies(response)
+    return response, 200
+
+# Get Current User
 @auth_bp.route('/user', methods=['GET'])
 @jwt_required()
 def get_current_user():

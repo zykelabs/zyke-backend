@@ -186,12 +186,12 @@ def create_brand_voice(profile_id, voice_data):
 
 def get_brand_voice(profile_id):
     """Retrieve a brand voice by brand profile ID."""
-    return brand_voices_collection.find_one({'brand_profile_id': ObjectId(profile_id)})
+    return brand_voices_collection.find_one({'brand_profile_id': profile_id})
 
 def update_brand_voice(profile_id, voice_data):
     """Update an existing brand voice associated with a brand profile."""
     result = brand_voices_collection.update_one(
-        {'brand_profile_id': ObjectId(profile_id)},
+        {'brand_profile_id': profile_id},
         {'$set': voice_data},
         upsert=True
     )

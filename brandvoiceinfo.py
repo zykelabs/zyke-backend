@@ -1462,7 +1462,7 @@ def create_brand():
                 return jsonify({'error': f'Failed to read file {file.filename}.'}), 400
 
         profile_data = {
-            'user_id': ObjectId(user_id),
+            'user_id': user_id,
             'company': company,
             'brandVoiceName': brand_voice_name,
             'industries': industries,
@@ -1589,7 +1589,7 @@ nest_asyncio.apply()
 def get_profile():
     try:
         user_id = get_jwt_identity()
-
+        print(user_id)
         # Fetch the brand profile from MongoDB
         brand_profile = get_brand_profile(user_id)
         if not brand_profile:
