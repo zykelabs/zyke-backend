@@ -40,6 +40,7 @@ class Config:
     PERPLEXITY_TOKEN = os.environ.get('PERPLEXITY_TOKEN')
     TOGETHER_API_KEY = os.environ.get('TOGETHER_API_KEY')
     OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
+    STABILITY_AI_API_KEY = os.environ.get('STABILITY_AI_API_KEY')
     
     # Google search API Secrets
     GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY')

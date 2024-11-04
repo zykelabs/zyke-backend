@@ -55,9 +55,7 @@ def oauth_init_app(app):
         client_id=os.environ.get('GOOGLE_CLIENT_ID'),
         client_secret=os.environ.get('GOOGLE_CLIENT_SECRET'),
         server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
-        client_kwargs={
-            'scope': 'openid email profile'
-        }
+        client_kwargs={'scope': 'openid email profile'}
     )
 
 # Initialize Razorpay client
@@ -278,22 +276,38 @@ def oauth_login():
     redirect_uri = request.base_url.replace('oauth/login', 'oauth/callback')
     return oauth.google.authorize_redirect(redirect_uri)
 
-@auth_bp.route('/oauth/callback', methods=['GET'])
+@auth_bp.route('/oauth/callback', methods=['POST'])
 def oauth_callback():
-    token = oauth.google.authorize_access_token()
-    user_info = oauth.google.parse_id_token(token)
+    data = request.get_json()
+    email = data.get('email')
+    first_name = data.get('first_name')
+    last_name = data.get('last_name')
+    provider_id = data.get('provider_id')  # Google's unique user ID
     
-    if not user_info:
-        return jsonify({"msg": "Failed to retrieve user info from Google"}), 400
+    if not email or not first_name or not last_name or not provider_id:
+        return jsonify({"msg": "Email, first name, last name, and provider ID are required"}), 400
 
-    email = user_info.get('email')
-    first_name = user_info.get('given_name')
-    last_name = user_info.get('family_name')
-    provider_id = user_info.get('sub')  # Google's unique user ID
+    user = find_user_by_email(email)
+    if user:
+        user_id = str(user['_id'])
+    else:
+        # Create new user
+        user_data = {
+            "email": email,
+            "password":None,
+            "first_name": first_name,
+            "last_name": last_name,
+            "auth_provider": "google",
+            "provider_id": provider_id,
+            "credits": 3.0,
+            "created_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow(),
+            "otp_verified": True,  # OAuth implies verified
+            "razorpay_customer_id": None
+        }
+        user_id = create_user(user_data)
 
-    if not email:
-        return jsonify({"msg": "Email not available from Google"}), 400
-
+    
     user = find_user_by_email(email)
     if user:
         user_id = str(user['_id'])
@@ -347,10 +361,9 @@ def oauth_callback():
         except Exception as e:
             logging.error("Error creating Razorpay customer for new user: %s", str(e))
             # Proceed without Razorpay customer ID
-
-    # Generate tokens
-    access_token = create_access_token(identity=str(user['_id'] if user else user_id), expires_delta=ACCESS_TOKEN_EXPIRES)
-    refresh_token = create_refresh_token(identity=str(user['_id'] if user else user_id), expires_delta=REFRESH_TOKEN_EXPIRES)
+    # Create tokens
+    access_token = create_access_token(identity=str(user_id), expires_delta=ACCESS_TOKEN_EXPIRES)
+    refresh_token = create_refresh_token(identity=str(user_id), expires_delta=REFRESH_TOKEN_EXPIRES)
 
     # Create response with tokens
     response = make_response(jsonify({"msg": "OAuth login successful"}))
@@ -359,8 +372,6 @@ def oauth_callback():
 
     return response, 200
 
-
-# Refresh Token Endpoint
 # Refresh Token Endpoint
 @auth_bp.route('/refresh', methods=['POST'])
 def refresh():

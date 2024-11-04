@@ -13,6 +13,8 @@ from trend_to_idea import trend_to_idea_bp
 from repurpose import repurpose_bp
 from idea_to_post import idea_to_post_bp
 from fetch_last_post import fetch_last_post_bp
+from inpaint import inpainting_bp
+from blend import blend_image_bp
 
 def create_app():
     app = Flask(__name__)
@@ -40,6 +42,9 @@ def create_app():
     app.register_blueprint(repurpose_bp, url_prefix='/repurpose')
     app.register_blueprint(idea_to_post_bp, url_prefix='/idea_to_post')
     app.register_blueprint(fetch_last_post_bp, url_prefix='/fetch_last_post')
+    app.register_blueprint(inpainting_bp, url_prefix='/inpaint')
+    app.register_blueprint(blend_image_bp, url_prefix='/blend')
+    
     
     @app.route('/')
     def home():
@@ -49,4 +54,4 @@ def create_app():
 
 if __name__ == '__main__':
     app = create_app()
-    app.run(debug=False)
+    app.run(debug=True)
