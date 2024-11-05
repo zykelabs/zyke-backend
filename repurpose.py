@@ -23,7 +23,7 @@ from collections import deque
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from config import Config
-from models import get_user_credits,deduct_and_log_user_credits
+from models import get_user_credits, deduct_and_log_user_credits
 
 # Get the absolute path of the current file
 file_path = os.path.abspath(__file__)

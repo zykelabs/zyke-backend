@@ -1,9 +1,10 @@
 from flask import Blueprint, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from pymongo import MongoClient
+from config import Config  # Import Config from the appropriate module
 
 # MongoDB setup
-client = MongoClient("mongodb://localhost:27017/")
+client = MongoClient(Config.MONGO_URI)
 db = client['zyke_data']
 collection = db['user_last_post']
 

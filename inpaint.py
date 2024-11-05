@@ -3,6 +3,8 @@ import requests
 import base64
 import io
 from config import Config
+from flask_jwt_extended import jwt_required, get_jwt_identity
+from models import get_user_credits, deduct_and_log_user_credits
 
 # Create a blueprint for inpainting
 inpainting_bp = Blueprint('inpaint', __name__)
@@ -46,23 +48,27 @@ def inpaint(img, mask, prompt=None, neg_prompt=None, remove="True"):
             "output_format": "webp",
         },
     )
+    
+    cost = 0.03
 
     if response.status_code == 200:
       base64_encoded_image = base64.b64encode(response.content).decode('utf-8')
       base64_image_uri = f"data:image/webp;base64,{base64_encoded_image}"
-      return base64_image_uri
+      return base64_image_uri, cost
     else:
-      raise Exception(str(response.json()))
+      return f"Error: {str(response.json())}", 0
 
 @inpainting_bp.route('/inpaint_image', methods=['POST'])
+@jwt_required()
 def inpaint_route():
+  user_id = get_jwt_identity()
   data = request.json
   img = data.get("image")
   mask = data.get("mask")
   prompt = data.get("prompt")
   neg_prompt = data.get("neg_prompt")
   remove = data.get("remove")
-  
+
   if not img or not mask:
     print({'error': 'image and mask are compulosrily required'})
     return jsonify({'error': 'img and mask are compulosrily required'}), 400
@@ -72,8 +78,29 @@ def inpaint_route():
     return jsonify({'error': 'either remove or prompt is required'}), 400
 
   try:
-    result = inpaint(img, mask, prompt, neg_prompt, remove)
-    return jsonify({"status": "success", "result": result})
+    # Fetch the user's current credits
+    user_credits = get_user_credits(user_id)
+    if user_credits is None:
+      return jsonify({'error': 'User not found'}), 404
+
+    # Check if the user has enough credits
+    if user_credits <= 0:
+      return jsonify({'error': 'Insufficient credits to repurpose content.'}), 402
+
+    result, cost = inpaint(img, mask, prompt, neg_prompt, remove)
+
+    # Deduct credits and log the transaction
+    deduction_description = f"Inpainting image content for user: {user_id}"
+    success, error_msg = deduct_and_log_user_credits(user_id, cost, deduction_description, transaction_type="inpaint_image")
+
+    if not success:
+        # Return the specific error message captured
+        return jsonify({"error": error_msg}), 500
+
+    # Fetch updated credits
+    updated_credits = get_user_credits(user_id)
+
+    return jsonify({"status": "success", "result": result, 'remainingCredits': updated_credits})
   
   except Exception as e:
     print(f"Error in inpainting images: {e}")

@@ -1281,7 +1281,7 @@ async def brand_post_info_scrape(insta_username):
   return out2, costs
 
 async def generate_brand_voice(company, industries, manual_urls, attachments, manual_input_text, design_text, location, content_types, brand_personalities, target_audience, brand_tone, brand_type, insta_handle):
-  return "Summary post", "Historical Post Analysis", 0.016
+  #   return "Summary post", "Historical Post Analysis", 0.016
   general_info = brand_info_scrape(company, industries, manual_urls, attachments, manual_input_text, design_text, location, content_types, brand_personalities, target_audience, brand_tone, brand_type)
   hist_post_analysis = brand_post_info_scrape(insta_handle)
   brand_voice_async = [general_info, hist_post_analysis]
@@ -1321,7 +1321,7 @@ def create_brand():
             return jsonify({'error': 'User not found'}), 404
 
         # Check if the user has enough credits
-        if user_credits < 0:
+        if user_credits <= 0:
             return jsonify({'error': 'Insufficient credits to generate brand voice.'}), 402
 
         # Ensure the request is multipart/form-data
@@ -1507,19 +1507,19 @@ def create_brand():
         #     total_cost += cost
         #     return summary, total_cost, sum_posts_data
         
-        print(profile_data['company'])
-        print(industries)
-        print([url['url'] for url in other_urls])
-        print(attachments)
-        print(profile_data['manualInputText'])
-        print(profile_data['designText'])
-        print(content_types)
-        print(brand_personalities)
-        print(target_audience)
-        print(profile_data['brandTone'])
-        print(profile_data['brandType'])
-        print([social_media['instagram']])
-        print(profile_data['location'])
+        # print(profile_data['company'])
+        # print(industries)
+        # print([url['url'] for url in other_urls])
+        # print(attachments)
+        # print(profile_data['manualInputText'])
+        # print(profile_data['designText'])
+        # print(content_types)
+        # print(brand_personalities)
+        # print(target_audience)
+        # print(profile_data['brandTone'])
+        # print(profile_data['brandType'])
+        # print([social_media['instagram']])
+        # print(profile_data['location'])
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -1549,8 +1549,11 @@ def create_brand():
 
         # Deduct credits and log the transaction
         deduction_description = "Brand voice creation"
-        if not deduct_and_log_user_credits(user_id, total_cost, deduction_description, transaction_type="brand_voice_creation"):
-            return jsonify({'error': 'Failed to deduct credits'}), 500
+        success, error_msg = deduct_and_log_user_credits(user_id, total_cost, deduction_description, transaction_type="brand_voice_creation")
+
+        if not success:
+            # Return the specific error message captured
+            return jsonify({"error": error_msg}), 500
 
         # Save the brand profile to MongoDB
         profile_id = create_brand_profile(user_id, profile_data)

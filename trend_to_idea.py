@@ -22,7 +22,8 @@ client_openai_gen = OpenAI(
 )
 
 # Initialize MongoDB client
-mongo_client = MongoClient(Config.MONGO_URI)
+mongo_client = MongoClient(Config.MONGO_URI, tls=True,
+    tlsAllowInvalidCertificates=True)
 db = mongo_client['zyke_data']  # Specify the database name
 
 # Initialize Collections
