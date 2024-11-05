@@ -1592,7 +1592,7 @@ nest_asyncio.apply()
 def get_profile():
     try:
         user_id = get_jwt_identity()
-        print(user_id)
+        # print(user_id)
         # Fetch the brand profile from MongoDB
         brand_profile = get_brand_profile(user_id)
         if not brand_profile:
