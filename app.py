@@ -15,6 +15,9 @@ from idea_to_post import idea_to_post_bp
 from fetch_last_post import fetch_last_post_bp
 from inpaint import inpainting_bp
 from blend import blend_image_bp
+from dotenv import load_dotenv
+
+load_dotenv()
 
 def create_app():
     app = Flask(__name__)

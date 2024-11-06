@@ -669,7 +669,7 @@ def generate_ideas_api():
 
     except Exception as e:
         logger.error(f"Error fetching cache: {e}")
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": f"Internal server error, Error: {e}"}), 500
 
     # Step 1: Fetch the user's brand profile based on user_id
     try:
