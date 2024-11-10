@@ -754,6 +754,7 @@ async def brand_info_scrape(company, industries, manual_urls, attachments, manua
   results = ''
   prompt = ''
   model = []
+
   if manual_urls is not None or len(manual_urls) != 0:
     tasks = [scrape_example(url) for url in manual_urls]
     # Run all tasks concurrently and gather the results
@@ -782,39 +783,47 @@ async def brand_info_scrape(company, industries, manual_urls, attachments, manua
   for i, attachment in enumerate(attachments):
     attachments_text += f'### Attachment {i+1}:\n---\n{attachment}\n\n\n\n'
 
-  total_text = f'#### **Name of the {entity}: {company}**\n### Location: {location}\n### **Industries:** '
-  for industry in industries:
-    total_text += f'{industry},'
-  total_text += '\b\n'
+  total_text = f'####{""} **Name of the {entity}: {company}**\n### Location: {location}\n'
 
-  total_text += f'### **{entity} Content type:**'
-  for content_type in content_types:
-    total_text += f'{content_type},'
-  total_text += '\b\n'
+  if len(industries) > 0:
+    total_text += "### **Industries:** "
+    for industry in industries:
+        total_text += f'{industry},'
+    total_text += '\n'
 
-  total_text += f'### **{entity} Target Audiences:**'
-  for audience in target_audience:
-    total_text += f'{audience},'
-  total_text += '\b\n'
+  if len(content_types) > 0:
+    total_text += f'###{""} **{entity} Content type:**'
+    for content_type in content_types:
+        total_text += f'{content_type},'
+    total_text += '\n'
+  
+  if len(target_audience) > 0:
+    total_text += f'###{""} **{entity} Target Audiences:**'
+    for audience in target_audience:
+        total_text += f'{audience},'
+    total_text += '\n'
 
-  total_text += f'### **{entity} Tone (Options: Neutral; Slightly, Occasionally, Mostly, Completely Casual or Neutal):** {brand_tone}\n'
-  total_text += f'### **{entity} Personality:**'
-  for personality in brand_personalities:
-    total_text += f'{personality},'
-  total_text += '\b\n\n\n\n'
+  total_text += f'###{""} **{entity} Tone (Options: Neutral; Slightly, Occasionally, Mostly, Completely Casual or Neutal):** {brand_tone}\n'
+  
+  if len(brand_personalities) > 0:
+    total_text += f'###{""} **{entity} Personality:**'
+    for personality in brand_personalities:
+        total_text += f'{personality},'
+    total_text += '\n\n\n\n'
 
-  total_text += f'#### {entity} style information (manually added):\n\n'
+  if (manual_input_text is not None or len(manual_input_text) >= 0) or (design_text is not None or len(design_text) >= 0):
+    total_text += f'#### {entity} style information (manually added):\n\n'
 
-  if manual_input_text is not None or len(manual_input_text) != 0:
-    total_text += f'### {entity} information (plain text):\n{manual_input_text}\n\n\n\n'
+    if manual_input_text is not None or len(manual_input_text) >= 0:
+        total_text += f'### {entity} information (plain text):\n{manual_input_text}\n\n\n\n'
 
-  if design_text is not None or len(design_text) != 0:
-    total_text += f'### {entity} Design Style Information (Plain Text):\n\n{design_text}\n\n\n\n'
+    if design_text is not None or len(design_text) >= 0:
+        total_text += f'### {entity} Design Style Information (Plain Text):\n\n{design_text}\n\n\n\n'
 
-  if attachments_text is not None or len(attachments_text) != 0:
+  if attachments_text is not None or len(attachments_text) >= 0:
     total_text += f'### User added attachments:\n\n{attachments_text}\n\n\n\n'
 
-  if manual_urls is not None or len(manual_urls) != 0:
+  if manual_urls is not None and len(manual_urls) >= 0:
     total_text += '### Website Scrapped Data:\n\n'
     for id, i in enumerate(website_manual):
       total_text += f'# Website URL: {manual_urls[id]}\n'
@@ -957,13 +966,13 @@ Since this data will guide an LLM to create social media posts, product descript
 
   final_results,cost = await final_summ(results, prompt, model)
   costs += cost
-  final_results = final_results.replace("#### ", "")
-  final_results = final_results.replace("### ", "")
-  final_results = final_results.replace("## ", "")
-  final_results = final_results.replace("####", "")
-  final_results = final_results.replace("###", "")
-  final_results = final_results.replace("##", "")
-  final_results = final_results.replace("**", "")
+  #   final_results = final_results.replace("#### ", "")
+  #   final_results = final_results.replace("### ", "")
+  #   final_results = final_results.replace("## ", "")
+  #   final_results = final_results.replace("####", "")
+  #   final_results = final_results.replace("###", "")
+  #   final_results = final_results.replace("##", "")
+  #   final_results = final_results.replace("**", "")
   return final_results, costs
 
 #Post Scrapping
@@ -1256,9 +1265,9 @@ async def brand_post_info_scrape(insta_username):
       # print(j)
       # base64_image = base64.b64encode(j.getvalue()).decode('utf-8')
       content.append({"type": "image_url",
-                          "image_url": {
-                          "url": j,
-                          "detail": "high"}})
+        "image_url": {
+        "url": j,
+        "detail": "high"}})
 
     # if check == 0:
     #   # descs.append(-1)
@@ -1282,18 +1291,24 @@ async def brand_post_info_scrape(insta_username):
 
 async def generate_brand_voice(company, industries, manual_urls, attachments, manual_input_text, design_text, location, content_types, brand_personalities, target_audience, brand_tone, brand_type, insta_handle):
   #   return "Summary post", "Historical Post Analysis", 0.016
-  general_info = brand_info_scrape(company, industries, manual_urls, attachments, manual_input_text, design_text, location, content_types, brand_personalities, target_audience, brand_tone, brand_type)
-  hist_post_analysis = brand_post_info_scrape(insta_handle)
-  brand_voice_async = [general_info, hist_post_analysis]
-  brand_voice = await asyncio.gather(*brand_voice_async)
+  if len(insta_handle) > 0:
+    general_info = brand_info_scrape(company, industries, manual_urls, attachments, manual_input_text, design_text, location, content_types, brand_personalities, target_audience, brand_tone, brand_type)
+    hist_post_analysis = brand_post_info_scrape(insta_handle)
+    brand_voice_async = [general_info, hist_post_analysis]
+    brand_voice = await asyncio.gather(*brand_voice_async)
 
-  costs = 0
-  general_info, cost = brand_voice[0]
-  costs += cost
-  post_data, cost = brand_voice[1]
-  costs += cost
+    costs = 0
+    general_info_text, cost = brand_voice[0]
+    costs += cost
+    post_data, cost = brand_voice[1]
+    costs += cost
 
-  return general_info, post_data, cost
+    return general_info_text, post_data, cost
+
+  else:
+    general_info = await brand_info_scrape(company, industries, manual_urls, attachments, manual_input_text, design_text, location, content_types, brand_personalities, target_audience, brand_tone, brand_type)
+    general_info_text, cost = general_info
+    return general_info_text, "", cost
 
 # # Function to verify next-auth JWT tokens
 # def verify_nextauth_jwt(token: str) -> Optional[str]:
@@ -1336,6 +1351,9 @@ def create_brand():
         brand_type = request.form.get('brandType', '').strip()
         industries = request.form.get('industries')
 
+        # print(industries)
+        # return jsonify({'no'})
+
         # Validate required fields
         required_fields = ['company', 'location', 'brandVoiceName', 'brandTone', 'brandType']
         missing_fields = [field for field in required_fields if not request.form.get(field)]
@@ -1358,6 +1376,9 @@ def create_brand():
         except:
             return jsonify({'error': 'Invalid format for industries.'}), 400
 
+        if len(industries) == 0 or len(industries[0]) == 0:
+            return jsonify({'error': 'Industries is empty.'}), 400
+
         # Extract and parse otherIndustries
         other_industries = request.form.get('otherIndustries', '[]')
         try:
@@ -1375,6 +1396,9 @@ def create_brand():
                 raise ValueError
         except:
             return jsonify({'error': 'Invalid format for contentTypes.'}), 400
+
+        if len(content_types) == 0 or len(content_types[0]) == 0:
+            return jsonify({'error': 'Content Type is empty.'}), 400
 
         # Extract and parse otherContentTypes
         other_content_types = request.form.get('otherContentTypes', '[]')
@@ -1394,6 +1418,9 @@ def create_brand():
         except:
             return jsonify({'error': 'Invalid format for targetAudience.'}), 400
 
+        if len(target_audience) == 0 or len(target_audience[0]) == 0:
+            return jsonify({'error': 'Industries is empty.'}), 400
+
         # Extract and parse otherTargetAudiences
         other_target_audiences = request.form.get('otherTargetAudiences', '[]')
         try:
@@ -1412,6 +1439,9 @@ def create_brand():
         except:
             return jsonify({'error': 'Invalid format for brandPersonalities.'}), 400
 
+        if len(brand_personalities) == 0 or len(brand_personalities[0]) == 0:
+            return jsonify({'error': 'Brand Personalities is empty.'}), 400
+
         # Extract and parse socialMedia
         social_media_json = request.form.get('socialMedia', '{}')
         try:
@@ -1425,8 +1455,8 @@ def create_brand():
         twitter = social_media_data.get("twitter", "").strip('@')
         linkedin = social_media_data.get("linkedin", "").strip()
 
-        if linkedin and not linkedin.startswith("https://www.linkedin.com/"):
-            return jsonify({'error': 'LinkedIn URL must start with "https://www.linkedin.com/"'}), 400
+        if linkedin and not linkedin.startswith("https://www.linkedin.com/","https://in.linkedin.com/"):
+            return jsonify({'error': 'LinkedIn URL must start with "https://www.linkedin.com/" or "https://in.linkedin.com/"'}), 400
 
         social_media = {
             "instagram": instagram,
