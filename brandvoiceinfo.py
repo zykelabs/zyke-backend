@@ -1290,8 +1290,10 @@ async def brand_post_info_scrape(insta_username):
   return out2, costs
 
 async def generate_brand_voice(company, industries, manual_urls, attachments, manual_input_text, design_text, location, content_types, brand_personalities, target_audience, brand_tone, brand_type, insta_handle):
-  #   return "Summary post", "Historical Post Analysis", 0.016
-  if len(insta_handle) > 0:
+  # return "Summary post", "Historical Post Analysis", 0.016
+  # print("\n\nInsta Handle: ",insta_handle)
+  if len(insta_handle) > 0 and len(insta_handle[0].strip()) > 0:
+    insta_handle[0] = insta_handle[0].strip()
     general_info = brand_info_scrape(company, industries, manual_urls, attachments, manual_input_text, design_text, location, content_types, brand_personalities, target_audience, brand_tone, brand_type)
     hist_post_analysis = brand_post_info_scrape(insta_handle)
     brand_voice_async = [general_info, hist_post_analysis]
@@ -1308,7 +1310,7 @@ async def generate_brand_voice(company, industries, manual_urls, attachments, ma
   else:
     general_info = await brand_info_scrape(company, industries, manual_urls, attachments, manual_input_text, design_text, location, content_types, brand_personalities, target_audience, brand_tone, brand_type)
     general_info_text, cost = general_info
-    return general_info_text, "", cost
+    return general_info_text, " ", cost
 
 # # Function to verify next-auth JWT tokens
 # def verify_nextauth_jwt(token: str) -> Optional[str]:

@@ -456,6 +456,8 @@ def describe_post(system_prompt, prompt, url, cont_type):
 
     contents.append(prompt)
 
+  # print(contents)
+
   response = model.generate_content(contents)
   #   print(response.usage_metadata)
   cost = (response.usage_metadata.prompt_token_count * 0.01875 + response.usage_metadata.candidates_token_count * 0.075) / (10**6)
@@ -487,9 +489,13 @@ def delete_file_from_gcp(url_local):
     bucket = storage_client.bucket(bucket_name)
     blob = bucket.blob(blob_name)
 
+    #print(blob_name)
+
     # Delete the blob
     if blob.exists():
+      #print("blob found")
       blob.delete()
+      #print("blob deleted")
 
 def upload_file_to_gcp(url_local):
     """Uploads a file to the bucket."""
@@ -516,7 +522,8 @@ def post_description(url, content_type, user_id):
   caption = ''
   saved_content_path = []
   costs = 0
-  
+  url_upload = ""
+
   current_file_path = os.path.abspath(__file__)
   current_dir_path = os.path.dirname(current_file_path)
 
@@ -532,18 +539,18 @@ def post_description(url, content_type, user_id):
     if type(links) == str:
       response = requests.get(links)
       url_local = f'{current_dir_path}/downloaded_video_{user_id}.mp4'
-      saved_content_path = [url_local]
-
+      saved_content_path.append(url_local)
+      url_upload = f'downloaded_video_{user_id}.mp4'
       with open(url_local, "wb") as f:
         f.write(response.content)
 
-      url = f"gs://zyke_bucket_gcp/{url_local}"
-      upload_file_to_gcp(url_local)
+      url = f"gs://zyke_bucket_gcp/{url_upload}"
+      upload_file_to_gcp(url_upload)
 
     else:
       for i, link in enumerate(links):
         response = requests.get(link)
-        url = f'{current_dir_path}/saved_image_{i}.png'
+        url = f'{current_dir_path}/saved_image_{user_id}_{i}.png'
 
         saved_content_path.append(url)
 
@@ -645,11 +652,13 @@ def post_description(url, content_type, user_id):
   costs += cost
   topic, summary, description = extract_topic_info(response)
 
+  # print(saved_content_path)
+
   for content_path in saved_content_path:
     os.remove(content_path)
 
   if content_type == "reel":
-    delete_file_from_gcp(f'{current_dir_path}/downloaded_video_{user_id}.mp4')
+    delete_file_from_gcp(url_upload)
 
   #   print(f"Topic: {topic}\n\nSummary: {summary}\n\nDescription: {description}")
   return topic, summary, description, costs
