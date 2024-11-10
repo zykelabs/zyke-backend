@@ -754,6 +754,7 @@ async def brand_info_scrape(company, industries, manual_urls, attachments, manua
   results = ''
   prompt = ''
   model = []
+
   if manual_urls is not None or len(manual_urls) != 0:
     tasks = [scrape_example(url) for url in manual_urls]
     # Run all tasks concurrently and gather the results
@@ -782,39 +783,47 @@ async def brand_info_scrape(company, industries, manual_urls, attachments, manua
   for i, attachment in enumerate(attachments):
     attachments_text += f'### Attachment {i+1}:\n---\n{attachment}\n\n\n\n'
 
-  total_text = f'#### **Name of the {entity}: {company}**\n### Location: {location}\n### **Industries:** '
-  for industry in industries:
-    total_text += f'{industry},'
-  total_text += '\b\n'
+  total_text = f'####{""} **Name of the {entity}: {company}**\n### Location: {location}\n'
 
-  total_text += f'### **{entity} Content type:**'
-  for content_type in content_types:
-    total_text += f'{content_type},'
-  total_text += '\b\n'
+  if len(industries) > 0:
+    total_text += "### **Industries:** "
+    for industry in industries:
+        total_text += f'{industry},'
+    total_text += '\n'
 
-  total_text += f'### **{entity} Target Audiences:**'
-  for audience in target_audience:
-    total_text += f'{audience},'
-  total_text += '\b\n'
+  if len(content_types) > 0:
+    total_text += f'###{""} **{entity} Content type:**'
+    for content_type in content_types:
+        total_text += f'{content_type},'
+    total_text += '\n'
+  
+  if len(target_audience) > 0:
+    total_text += f'###{""} **{entity} Target Audiences:**'
+    for audience in target_audience:
+        total_text += f'{audience},'
+    total_text += '\n'
 
-  total_text += f'### **{entity} Tone (Options: Neutral; Slightly, Occasionally, Mostly, Completely Casual or Neutal):** {brand_tone}\n'
-  total_text += f'### **{entity} Personality:**'
-  for personality in brand_personalities:
-    total_text += f'{personality},'
-  total_text += '\b\n\n\n\n'
+  total_text += f'###{""} **{entity} Tone (Options: Neutral; Slightly, Occasionally, Mostly, Completely Casual or Neutal):** {brand_tone}\n'
+  
+  if len(brand_personalities) > 0:
+    total_text += f'###{""} **{entity} Personality:**'
+    for personality in brand_personalities:
+        total_text += f'{personality},'
+    total_text += '\n\n\n\n'
 
-  total_text += f'#### {entity} style information (manually added):\n\n'
+  if (manual_input_text is not None or len(manual_input_text) >= 0) or (design_text is not None or len(design_text) >= 0):
+    total_text += f'#### {entity} style information (manually added):\n\n'
 
-  if manual_input_text is not None or len(manual_input_text) != 0:
-    total_text += f'### {entity} information (plain text):\n{manual_input_text}\n\n\n\n'
+    if manual_input_text is not None or len(manual_input_text) >= 0:
+        total_text += f'### {entity} information (plain text):\n{manual_input_text}\n\n\n\n'
 
-  if design_text is not None or len(design_text) != 0:
-    total_text += f'### {entity} Design Style Information (Plain Text):\n\n{design_text}\n\n\n\n'
+    if design_text is not None or len(design_text) >= 0:
+        total_text += f'### {entity} Design Style Information (Plain Text):\n\n{design_text}\n\n\n\n'
 
-  if attachments_text is not None or len(attachments_text) != 0:
+  if attachments_text is not None or len(attachments_text) >= 0:
     total_text += f'### User added attachments:\n\n{attachments_text}\n\n\n\n'
 
-  if manual_urls is not None or len(manual_urls) != 0:
+  if manual_urls is not None and len(manual_urls) >= 0:
     total_text += '### Website Scrapped Data:\n\n'
     for id, i in enumerate(website_manual):
       total_text += f'# Website URL: {manual_urls[id]}\n'
@@ -957,13 +966,13 @@ Since this data will guide an LLM to create social media posts, product descript
 
   final_results,cost = await final_summ(results, prompt, model)
   costs += cost
-  final_results = final_results.replace("#### ", "")
-  final_results = final_results.replace("### ", "")
-  final_results = final_results.replace("## ", "")
-  final_results = final_results.replace("####", "")
-  final_results = final_results.replace("###", "")
-  final_results = final_results.replace("##", "")
-  final_results = final_results.replace("**", "")
+  #   final_results = final_results.replace("#### ", "")
+  #   final_results = final_results.replace("### ", "")
+  #   final_results = final_results.replace("## ", "")
+  #   final_results = final_results.replace("####", "")
+  #   final_results = final_results.replace("###", "")
+  #   final_results = final_results.replace("##", "")
+  #   final_results = final_results.replace("**", "")
   return final_results, costs
 
 #Post Scrapping
@@ -1256,9 +1265,9 @@ async def brand_post_info_scrape(insta_username):
       # print(j)
       # base64_image = base64.b64encode(j.getvalue()).decode('utf-8')
       content.append({"type": "image_url",
-                          "image_url": {
-                          "url": j,
-                          "detail": "high"}})
+        "image_url": {
+        "url": j,
+        "detail": "high"}})
 
     # if check == 0:
     #   # descs.append(-1)
@@ -1281,19 +1290,27 @@ async def brand_post_info_scrape(insta_username):
   return out2, costs
 
 async def generate_brand_voice(company, industries, manual_urls, attachments, manual_input_text, design_text, location, content_types, brand_personalities, target_audience, brand_tone, brand_type, insta_handle):
-  #   return "Summary post", "Historical Post Analysis", 0.016
-  general_info = brand_info_scrape(company, industries, manual_urls, attachments, manual_input_text, design_text, location, content_types, brand_personalities, target_audience, brand_tone, brand_type)
-  hist_post_analysis = brand_post_info_scrape(insta_handle)
-  brand_voice_async = [general_info, hist_post_analysis]
-  brand_voice = await asyncio.gather(*brand_voice_async)
+  # return "Summary post", "Historical Post Analysis", 0.016
+  # print("\n\nInsta Handle: ",insta_handle)
+  if len(insta_handle) > 0 and len(insta_handle[0].strip()) > 0:
+    insta_handle[0] = insta_handle[0].strip()
+    general_info = brand_info_scrape(company, industries, manual_urls, attachments, manual_input_text, design_text, location, content_types, brand_personalities, target_audience, brand_tone, brand_type)
+    hist_post_analysis = brand_post_info_scrape(insta_handle)
+    brand_voice_async = [general_info, hist_post_analysis]
+    brand_voice = await asyncio.gather(*brand_voice_async)
 
-  costs = 0
-  general_info, cost = brand_voice[0]
-  costs += cost
-  post_data, cost = brand_voice[1]
-  costs += cost
+    costs = 0
+    general_info_text, cost = brand_voice[0]
+    costs += cost
+    post_data, cost = brand_voice[1]
+    costs += cost
 
-  return general_info, post_data, cost
+    return general_info_text, post_data, cost
+
+  else:
+    general_info = await brand_info_scrape(company, industries, manual_urls, attachments, manual_input_text, design_text, location, content_types, brand_personalities, target_audience, brand_tone, brand_type)
+    general_info_text, cost = general_info
+    return general_info_text, " ", cost
 
 # # Function to verify next-auth JWT tokens
 # def verify_nextauth_jwt(token: str) -> Optional[str]:

@@ -24,7 +24,7 @@ def create_app():
     app.config.from_object(Config)
     
     # Configure CORS to allow frontend domain
-    CORS(app)
+    CORS(app, resources={r"/*": {"origins": ["https://zyke.in","https://www.zyke.in"]}})
     
     # Initialize Flask-Mail
     init_mail(app)
@@ -47,14 +47,27 @@ def create_app():
     app.register_blueprint(fetch_last_post_bp, url_prefix='/fetch_last_post')
     app.register_blueprint(inpainting_bp, url_prefix='/inpaint')
     app.register_blueprint(blend_image_bp, url_prefix='/blend')
-    
-    
+
+
     @app.route('/')
     def home():
         return jsonify({'msg': 'Welcome to the Flask Authentication and Brand API!'})
-    
+
+    # Global error handler to include CORS headers
+    @app.errorhandler(Exception)
+    def handle_exception(e):
+        # Log the error
+        # logger.error(f"Unhandled Exception: {e}", exc_info=True)
+
+        # Return JSON response with CORS headers
+        response = jsonify({"error": "Internal Server Error", "message": str(e)})
+        response.status_code = 500
+        return response
+
     return app
 
+app = create_app()
+
 if __name__ == '__main__':
-    app = create_app()
-    app.run(debug=True)
+    # app.run(debug=True)
+    app.run()
