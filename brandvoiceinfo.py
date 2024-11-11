@@ -1457,7 +1457,7 @@ def create_brand():
         twitter = social_media_data.get("twitter", "").strip('@')
         linkedin = social_media_data.get("linkedin", "").strip()
 
-        if linkedin and not linkedin.startswith("https://www.linkedin.com/","https://in.linkedin.com/"):
+        if linkedin and not (linkedin.startswith("https://www.linkedin.com/") or linkedin.startswith("https://in.linkedin.com/")):
             return jsonify({'error': 'LinkedIn URL must start with "https://www.linkedin.com/" or "https://in.linkedin.com/"'}), 400
 
         social_media = {
