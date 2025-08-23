@@ -1114,9 +1114,13 @@ Image 3:
   , max_tokens=8192,
   temperature = 0.15)
 
-  cost = (response.usage.prompt_tokens * 0.15 + response.usage.completion_tokens * 0.6) / (10**6)
+  try:
+    cost = (response.usage.prompt_tokens * 0.15 + response.usage.completion_tokens * 0.6) / (10**6)
+    return (response.choices[0].message.content, cost, caption)
 
-  return (response.choices[0].message.content,cost,caption)
+  except Exception as e:
+    print("Error: " + str(e))
+    return "Url not found", 0.0, caption
 
 async def image_out_summ(text):
   chat_history = [{"role": "system","content":
@@ -1190,6 +1194,7 @@ Focus on clarity and conciseness while maintaining the brand’s distinct identi
         # print(completion.usage)
         cost = (completion.usage.prompt_tokens * 3 + completion.usage.completion_tokens * 12) / (10**6)
         return completion.choices[0].message.content, cost
+
   except Exception as e:
     print(e)
     return ("Error: " + str(e)), 0
