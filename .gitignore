@@ -81,3 +81,16 @@ dmypy.json
 # Windows specific files
 Thumbs.db
 desktop.ini
+
+# Credential files. A Google Cloud service account key was committed here once
+# and has been purged from this repository's history; that key was revoked.
+# Never commit these.
+!.env.example
+*service-account*.json
+*serviceaccount*.json
+superb-firefly-*.json
+client_secret*.json
+credentials.json
+*.pem
+*.p12
+*.key
